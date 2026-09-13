@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Runtime config / state (created next to the config, never in the repo)
+config.toml
+config.toml.bak.*
+history.json
+rotations.json
+snippets.json
+tunnels.json
+logs/
+
+# Secrets locali
+secrets.tsv
