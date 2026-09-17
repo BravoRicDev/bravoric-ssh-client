@@ -12,6 +12,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Credential providers (`keyring`, `plain`) with per-host override.
 - Import from `~/.ssh/config` and Remmina.
 - File exchange via `scp` and Midnight Commander.
+- MCP file transfer tools: `sftp_download`, `sftp_upload`, `transfer_file`
+  (host-to-host relay via local temp, with md5).
 - SSH tunnels (`-L`/`-R`/`-D`), jump host/bastion, broadcast snippets.
 - Rotation profiles and the observe screen.
 - Session audit trail to gzip logs.

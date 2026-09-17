@@ -35,6 +35,12 @@ def _dump_json(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, indent=2)
 
 
+# Shell/processi che indicano "nessun processo in primo piano da chiudere".
+# Sorgente unica: adapter.SHELL_COMMANDS (NB: 'node' NON è incluso: molte TUI
+# come opencode girano proprio come 'node').
+_SHELL_COMMANDS = adapter.SHELL_COMMANDS
+
+
 def _wait_run_and_read(
     mcp: BravoricMcp, host: Host, command: str, timeout: int, prefix: str
 ) -> tuple[bool, str, str]:
@@ -79,6 +85,58 @@ def _wait_run_and_read(
     return False, "", f"timeout dopo {timeout}s"
 
 
+class PaneDiffTracker:
+    """Cache di snapshot delle pane per restituire solo le righe NUOVE (token saver).
+
+    La chiave è ``(alias, session)``: al primo campionamento si salva una baseline;
+    ai successivi si calcola il delta incrementale a finestra scorrevole, così
+    l'agente riceve solo il contenuto aggiunto invece dell'intera pane.
+    """
+
+    def __init__(self) -> None:
+        self._cache: dict[tuple[str, str], list[str]] = {}
+
+    def reset(self, key: tuple[str, str] | None = None) -> None:
+        """Azzera un singolo snapshot (o l'intera cache se ``key`` è None)."""
+        if key is None:
+            self._cache.clear()
+        else:
+            self._cache.pop(key, None)
+
+    @staticmethod
+    def _sliding_window_delta(old: list[str], new: list[str]) -> list[str]:
+        """Righe nuove di ``new`` rispetto a ``old``.
+
+        Caso comune (scroll): la coda di ``old`` ricompare in testa a ``new`` e il
+        delta è ciò che segue. Se non c'è overlap diretto (redraw di una TUI,
+        troncamento del buffer) si ripiega su un diff per blocchi (difflib).
+        """
+        if not old:
+            return list(new)
+        if not new:
+            return []
+        max_overlap = min(len(old), len(new))
+        for k in range(max_overlap, 0, -1):
+            if old[-k:] == new[:k]:
+                return new[k:]
+        import difflib
+
+        delta: list[str] = []
+        sm = difflib.SequenceMatcher(a=old, b=new, autojunk=False)
+        for tag, _i1, _i2, j1, j2 in sm.get_opcodes():
+            if tag in ("insert", "replace"):
+                delta.extend(new[j1:j2])
+        return delta
+
+    def capture(self, key: tuple[str, str], current_lines: list[str]) -> tuple[bool, list[str]]:
+        """Aggiorna lo snapshot e ritorna ``(is_first_sample, delta)``."""
+        old = self._cache.get(key)
+        self._cache[key] = current_lines
+        if old is None:
+            return True, current_lines[-15:]
+        return False, self._sliding_window_delta(old, current_lines)
+
+
 class BravoricMcp:
     """Wrapper dell'MCPServer che registra i tool e detiene lo stato."""
 
@@ -87,6 +145,7 @@ class BravoricMcp:
 
         self.config = config
         self.tunnels = TunnelManager()
+        self.pane_diffs = PaneDiffTracker()
         self.server = MCPServer(
             "bravoric-ssh",
             title="bravoric-ssh-client",
@@ -405,6 +464,84 @@ class BravoricMcp:
         results.sort(key=lambda r: r["host"])
         return self._dump(results)
 
+    # ---------- trasferimento file (scp/SFTP) ----------
+
+    def sftp_download(self, alias: str, remote: str, local: str) -> str:
+        """Scarica un file da un host in locale (scp, password dal provider)."""
+        from .ssh import file_ops
+
+        host = self._host(alias)
+        local_path = Path(local).expanduser()
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        res = file_ops.download(host, remote, str(local_path), self._password_for(host))
+        return self._dump(
+            {
+                "host": alias,
+                "remote": remote,
+                "local": str(local_path),
+                "ok": res.ok,
+                "stdout": res.stdout,
+                "stderr": res.stderr,
+            }
+        )
+
+    def sftp_upload(self, alias: str, local: str, remote: str) -> str:
+        """Carica un file locale su un host (scp, password dal provider)."""
+        from .ssh import file_ops
+
+        host = self._host(alias)
+        local_path = Path(local).expanduser()
+        res = file_ops.upload(host, str(local_path), remote, self._password_for(host))
+        return self._dump(
+            {
+                "host": alias,
+                "local": str(local_path),
+                "remote": remote,
+                "ok": res.ok,
+                "stdout": res.stdout,
+                "stderr": res.stderr,
+            }
+        )
+
+    def transfer_file(
+        self, src_alias: str, src_remote: str, dst_alias: str, dst_remote: str
+    ) -> str:
+        """Trasferisce un file tra due host passando da un file temporaneo locale.
+
+        Utile quando i due host non si raggiungono direttamente: scarica dal
+        sorgente, carica sulla destinazione e riporta dimensione e md5.
+        """
+        import hashlib
+        import tempfile
+
+        from .ssh import file_ops
+
+        src = self._host(src_alias)
+        dst = self._host(dst_alias)
+        with tempfile.TemporaryDirectory(prefix="bravoric-xfer-") as tmpdir:
+            tmp = Path(tmpdir) / Path(src_remote).name
+            down = file_ops.download(src, src_remote, str(tmp), self._password_for(src))
+            if not down.ok:
+                return self._dump(
+                    {"ok": False, "stage": "download", "host": src_alias, "stderr": down.stderr}
+                )
+            size = tmp.stat().st_size
+            md5 = hashlib.md5(tmp.read_bytes()).hexdigest()
+            up = file_ops.upload(dst, str(tmp), dst_remote, self._password_for(dst))
+            if not up.ok:
+                return self._dump(
+                    {"ok": False, "stage": "upload", "host": dst_alias, "stderr": up.stderr}
+                )
+        return self._dump(
+            {
+                "ok": True,
+                "src": f"{src_alias}:{src_remote}",
+                "dst": f"{dst_alias}:{dst_remote}",
+                "bytes": size,
+                "md5": md5,
+            }
+        )
+
     # ---------- sessioni tmux ----------
 
     def list_sessions(self, alias: str) -> str:
@@ -459,6 +596,41 @@ class BravoricMcp:
             return f"errore: {(res.stderr or '').strip()}"
         return res.stdout.strip() or "(nessuna finestra)"
 
+    def list_windows_parsed(self, alias: str, session: str) -> str:
+        """Elenca le finestre in forma strutturata (indice, nome, attiva, pane)."""
+        res = adapter.tmux_list_windows_parsed(self._host(alias), session, self._ssh_cfg())
+        if not res.ok:
+            return self._dump({"ok": False, "host": alias, "session": session, "error": res.error})
+        return self._dump(
+            {
+                "ok": True,
+                "host": alias,
+                "session": session,
+                "count": len(res.windows),
+                "windows": [
+                    {
+                        "index": w.index,
+                        "name": w.name,
+                        "active": w.active,
+                        "pane_count": w.pane_count,
+                        "layout": w.layout,
+                    }
+                    for w in res.windows
+                ],
+            }
+        )
+
+    def select_window(self, alias: str, session: str, window_index: int) -> str:
+        """Rende attiva (visibile) una finestra della sessione."""
+        res = adapter.tmux_select_window(
+            self._host(alias), session, window_index, self._ssh_cfg()
+        )
+        return (
+            f"finestra {window_index} attivata in '{session}'"
+            if res.ok
+            else f"errore: {(res.stderr or '').strip()}"
+        )
+
     def new_window(self, alias: str, session: str, name: str | None = None) -> str:
         res = adapter.tmux_new_window(self._host(alias), session, name, self._ssh_cfg())
         return (
@@ -485,6 +657,54 @@ class BravoricMcp:
             return f"errore: {(res.stderr or '').strip()}"
         return res.stdout or "(pane vuoto)"
 
+    def pane_diff(
+        self, alias: str, session: str, max_lines: int = 200, reset: bool = False
+    ) -> str:
+        """Snapshot & diff incrementale dell'output di una pane (token saver).
+
+        Al primo campionamento restituisce una preview (baseline). Ai successivi
+        restituisce SOLO le righe nuove (``new_content``) con ``diff_count``, così
+        il monitoraggio di build/server log/TUI non ricarica centinaia di token.
+        ``reset=True`` azzera la baseline per quella pane.
+        """
+        host = self._host(alias)
+        key = (host.alias, session)
+        if reset:
+            self.pane_diffs.reset(key)
+        cap = adapter.tmux_capture_pane(
+            host, session, self._ssh_cfg(), lines=int(max_lines)
+        )
+        if not cap.ok:
+            return self._dump(
+                {"ok": False, "error": (cap.stderr or "").strip() or "capture fallita"}
+            )
+        current = (cap.stdout or "").splitlines()
+        is_first, delta = self.pane_diffs.capture(key, current)
+        if is_first:
+            return self._dump(
+                {
+                    "ok": True,
+                    "host": alias,
+                    "session": session,
+                    "is_first_sample": True,
+                    "total_lines": len(current),
+                    "new_lines": delta,
+                    "diff_count": 0,
+                }
+            )
+        return self._dump(
+            {
+                "ok": True,
+                "host": alias,
+                "session": session,
+                "is_first_sample": False,
+                "has_changes": len(delta) > 0,
+                "diff_count": len(delta),
+                "total_lines": len(current),
+                "new_content": "\n".join(delta),
+            }
+        )
+
     def send_keys(self, alias: str, session: str, text: str) -> str:
         res = adapter.tmux_send_keys(self._host(alias), session, text, self._ssh_cfg())
         return "inviato" if res.ok else f"errore: {(res.stderr or '').strip()}"
@@ -496,6 +716,246 @@ class BravoricMcp:
     def send_raw(self, alias: str, session: str, keys: str) -> str:
         res = adapter.tmux_send_raw(self._host(alias), session, keys, self._ssh_cfg())
         return "tasti inviati" if res.ok else f"errore: {(res.stderr or '').strip()}"
+
+    def paste(
+        self,
+        alias: str,
+        session: str,
+        content: str,
+        bracketed: bool = True,
+        enter: bool = False,
+    ) -> str:
+        """Incolla testo multiriga/file nella sessione con bracketed paste.
+
+        Usa un buffer tmux dedicato (niente send-keys riga per riga): l'indentazione
+        e i caratteri speciali arrivano intatti e le TUI ricevono i marcatori di
+        bracketed paste. Con ``enter=True`` invia anche Invio dopo l'incolla.
+        """
+        host = self._host(alias)
+        res = adapter.tmux_paste_buffer(
+            host, session, content, self._ssh_cfg(), bracketed=bool(bracketed)
+        )
+        if not res.ok:
+            return self._dump(
+                {"ok": False, "error": (res.stderr or "").strip() or "paste fallita"}
+            )
+        if enter:
+            adapter.tmux_send_enter(host, session, self._ssh_cfg())
+        return self._dump(
+            {
+                "ok": True,
+                "host": alias,
+                "session": session,
+                "chars": len(content),
+                "lines": content.count("\n") + 1,
+                "bracketed": bool(bracketed),
+                "enter": bool(enter),
+            }
+        )
+
+    # ---------- chiusura del processo in primo piano ----------
+
+    def _pane_current_command(self, host: Host, session: str) -> str:
+        """Legge il processo in primo piano (nome base, senza path)."""
+        res = adapter.tmux_pane_command(host, session, self._ssh_cfg())
+        if not res.ok:
+            return ""
+        raw = (res.stdout or "").strip().splitlines()
+        if not raw:
+            return ""
+        return raw[0].strip().lstrip("-").split("/")[-1]
+
+    @staticmethod
+    def _is_shell(cmd: str) -> bool:
+        return cmd.strip().lstrip("-").split("/")[-1] in _SHELL_COMMANDS
+
+    def pane_command(self, alias: str, session: str) -> str:
+        """Mostra il processo in primo piano nella pane attiva (es. 'opencode', 'node')."""
+        cur = self._pane_current_command(self._host(alias), session)
+        if not cur:
+            return f"errore: impossibile leggere il processo in primo piano su '{session}'"
+        return cur
+
+    def pane_info(self, alias: str, session: str) -> str:
+        """Processo, CWD, PID, titolo e dimensioni della pane attiva in una sola chiamata."""
+        info = adapter.tmux_pane_info(self._host(alias), session, self._ssh_cfg())
+        if not info.ok:
+            return self._dump({"ok": False, "host": alias, "session": session, "error": info.error})
+        return self._dump(
+            {
+                "ok": True,
+                "host": alias,
+                "session": session,
+                "command": info.command,
+                "cwd": info.cwd,
+                "pid": info.pid,
+                "title": info.title,
+                "size": f"{info.width}x{info.height}",
+                "width": info.width,
+                "height": info.height,
+                "is_shell": info.is_shell,
+            }
+        )
+
+    def close_foreground(
+        self, alias: str, session: str, method: str = "auto", force: bool = False
+    ) -> str:
+        """Chiude il processo in primo piano in una sessione tmux (TUI o comando).
+
+        Legge ``#{pane_current_command}``: se è solo una shell non fa nulla
+        (a meno di ``force=True``). Altrimenti invia una sequenza di chiusura e
+        ricontrolla dopo ogni passo.
+
+        ``method``: ``auto`` (escalation C-c, C-c, C-d) | ``sigint`` (C-c) |
+        ``sigint2`` (C-c C-c) | ``eof`` (C-d) | ``exit`` (/exit + Enter).
+        """
+        import time
+
+        host = self._host(alias)
+        cfg = self._ssh_cfg()
+
+        def pane_cmd() -> str:
+            return self._pane_current_command(host, session)
+
+        before = pane_cmd()
+        if not before:
+            return f"errore: sessione '{session}' non trovata o pane non leggibile"
+        if self._is_shell(before) and not force:
+            return f"nessun processo in primo piano da chiudere (shell attiva: {before})"
+
+        if method == "auto":
+            steps: list[tuple[str, str]] = [("key", "C-c"), ("key", "C-c"), ("key", "C-d")]
+        else:
+            table: dict[str, list[tuple[str, str]]] = {
+                "sigint": [("key", "C-c")],
+                "sigint2": [("key", "C-c"), ("key", "C-c")],
+                "eof": [("key", "C-d")],
+                "exit": [("text", "/exit")],
+            }
+            steps = table.get(method)
+            if steps is None:
+                return f"errore: metodo sconosciuto '{method}' (usa auto|sigint|sigint2|eof|exit)"
+
+        done: list[str] = []
+        for kind, val in steps:
+            if kind == "key":
+                adapter.tmux_send_raw(host, session, val, cfg)
+                done.append(val)
+            else:
+                adapter.tmux_send_keys(host, session, val, cfg)
+                adapter.tmux_send_enter(host, session, cfg)
+                done.append(f"{val}+Enter")
+            time.sleep(0.7)
+            now = pane_cmd()
+            if not now or self._is_shell(now):
+                return f"chiuso '{before}' nella sessione '{session}' (sequenza: {', '.join(done)})"
+
+        now = pane_cmd()
+        if now and not self._is_shell(now):
+            return (
+                f"attenzione: '{now}' risulta ancora attivo in '{session}' dopo: "
+                f"{', '.join(done)}. Prova un altro metodo o invia i tasti manualmente."
+            )
+        return f"chiuso '{before}' nella sessione '{session}' (sequenza: {', '.join(done)})"
+
+    def restart_foreground(
+        self, alias: str, session: str, fallback_command: str = ""
+    ) -> str:
+        """Chiude il processo in primo piano e lo rilancia (riavvio deterministico).
+
+        Unisce ``close_foreground`` e il rilancio in una sola operazione sicura per
+        ripristinare processi incastrati (agente crashato, server bloccato). Il
+        comando da rilanciare è ``fallback_command``; se vuoto si rilancia lo stesso
+        processo rilevato prima della chiusura. Se la pane era già una shell serve
+        un ``fallback_command`` esplicito (altrimenti non c'è nulla da riavviare).
+        """
+        import time
+
+        host = self._host(alias)
+        cfg = self._ssh_cfg()
+
+        # 1) rileva il processo attuale
+        info = adapter.tmux_pane_info(host, session, cfg)
+        if not info.ok:
+            return self._dump(
+                {
+                    "ok": False,
+                    "host": alias,
+                    "session": session,
+                    "error": f"Impossibile analizzare la pane: {info.error}",
+                }
+            )
+        previous = info.command
+        fallback = (fallback_command or "").strip()
+
+        # 2) pane già idle (shell): lancia direttamente il comando richiesto
+        if info.is_shell:
+            if not fallback:
+                return self._dump(
+                    {
+                        "ok": False,
+                        "host": alias,
+                        "session": session,
+                        "error": (
+                            "Nessun processo attivo e nessun comando specificato "
+                            "per il riavvio"
+                        ),
+                    }
+                )
+            adapter.tmux_send_keys(host, session, fallback, cfg)
+            adapter.tmux_send_enter(host, session, cfg)
+            return self._dump(
+                {
+                    "ok": True,
+                    "host": alias,
+                    "session": session,
+                    "restarted": fallback,
+                    "method": "direct_launch",
+                }
+            )
+
+        command = fallback or previous
+
+        # 3) chiudi con la funzione verificata (escalation C-c, C-c, C-d)
+        close_msg = self.close_foreground(alias, session, method="auto")
+        if close_msg.strip().lower().startswith("errore"):
+            return self._dump(
+                {"ok": False, "host": alias, "session": session, "error": close_msg.strip()}
+            )
+
+        # 4) attesa attiva del rilascio del prompt shell (max 5 s)
+        deadline = time.time() + 5.0
+        prompt_ready = False
+        while time.time() < deadline:
+            cur = adapter.tmux_pane_info(host, session, cfg)
+            if cur.ok and cur.is_shell:
+                prompt_ready = True
+                break
+            time.sleep(0.5)
+        if not prompt_ready:
+            return self._dump(
+                {
+                    "ok": False,
+                    "host": alias,
+                    "session": session,
+                    "closed": previous,
+                    "error": "Il processo precedente non ha liberato la shell in tempo",
+                }
+            )
+
+        # 5) rilancio
+        adapter.tmux_send_keys(host, session, command, cfg)
+        adapter.tmux_send_enter(host, session, cfg)
+        return self._dump(
+            {
+                "ok": True,
+                "host": alias,
+                "session": session,
+                "closed": previous,
+                "restarted": command,
+                "status": "success",
+            }
+        )
 
     # ---------- comandi batch ----------
 
@@ -888,6 +1348,16 @@ class BravoricMcp:
             ),
             ("detach_clients", "detach_clients", "Stacca gli altri client dalla sessione."),
             ("list_windows", "list_windows", "Elenca le finestre di una sessione."),
+            (
+                "list_windows_parsed",
+                "list_windows_parsed",
+                "Finestre di una sessione in forma strutturata (indice, nome, attiva).",
+            ),
+            (
+                "select_window",
+                "select_window",
+                "Rende attiva (visibile) una finestra della sessione.",
+            ),
             ("new_window", "new_window", "Crea una finestra in una sessione."),
             ("rename_window", "rename_window", "Rinomina una finestra."),
             ("kill_window", "kill_window", "Chiude una finestra."),
@@ -899,6 +1369,36 @@ class BravoricMcp:
             ("send_keys", "send_keys", "Invia testo letterale alla sessione."),
             ("send_enter", "send_enter", "Invia Invio alla sessione."),
             ("send_raw", "send_raw", "Invia tasti tmux non letterali (es. C-c, Up)."),
+            (
+                "paste",
+                "paste",
+                "Incolla testo/file nella sessione con bracketed paste (buffer tmux).",
+            ),
+            (
+                "pane_info",
+                "pane_info",
+                "Processo, CWD, PID, titolo e dimensioni della pane attiva.",
+            ),
+            (
+                "pane_diff",
+                "pane_diff",
+                "Snapshot & diff incrementale dell'output di una pane (solo righe nuove).",
+            ),
+            (
+                "pane_command",
+                "pane_command",
+                "Mostra il processo in primo piano nella pane attiva (es. node, bash).",
+            ),
+            (
+                "close_foreground",
+                "close_foreground",
+                "Chiude il processo in primo piano (TUI/comando) in una sessione tmux.",
+            ),
+            (
+                "restart_foreground",
+                "restart_foreground",
+                "Chiude e rilancia il processo in primo piano (riavvio deterministico).",
+            ),
             ("run_command", "run_command", "Esegue un comando batch su un host (ssh)."),
             (
                 "run_command_many",
@@ -954,6 +1454,21 @@ class BravoricMcp:
                 "read_remote_audit_log",
                 "read_remote_audit_log",
                 "Legge un log audit .gz remoto (max_lines=0 = tutto).",
+            ),
+            (
+                "sftp_download",
+                "sftp_download",
+                "Scarica un file da un host in locale (scp/SFTP, password dal provider).",
+            ),
+            (
+                "sftp_upload",
+                "sftp_upload",
+                "Carica un file locale su un host (scp/SFTP, password dal provider).",
+            ),
+            (
+                "transfer_file",
+                "transfer_file",
+                "Trasferisce un file tra due host via temp locale (md5 riportato).",
             ),
         ]
         for name, method_name, description in specs:

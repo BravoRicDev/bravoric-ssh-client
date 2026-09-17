@@ -1,6 +1,6 @@
 ---
 name: bravoric-ssh
-description: Use bravoric-ssh MCP server (tools bravoric-ssh_*) to control SSH hosts and tmux sessions managed by the user's bravoric-ssh-client: list hosts, create/drive detached tmux sessions (send-keys/capture-pane), run batch commands in parallel, broadcast snippets, manage SSH tunnels and read audit logs. Use when the user asks to check, control, or drive their servers/tmux sessions through the MCP server.
+description: "Use bravoric-ssh MCP server (tools bravoric-ssh_*) to control SSH hosts and tmux sessions managed by the user's bravoric-ssh-client: list hosts, create/drive detached tmux sessions (send-keys/capture-pane), run batch commands in parallel, broadcast snippets, manage SSH tunnels and read audit logs. Use when the user asks to check, control, or drive their servers/tmux sessions through the MCP server."
 ---
 
 # bravoric-ssh MCP — Guida per gli agenti
@@ -20,10 +20,14 @@ l'output: l'**attach interattivo resta all'utente** (dalla TUI o dal terminale).
 - **Sessioni tmux**: `list_sessions`, `create_session` (detached, comando opzionale),
   `session_details`, `rename_session`, `kill_session`, `kill_server`, `detach_clients`,
   `list_windows`, `new_window`, `rename_window`, `kill_window`, `capture_pane`,
-  `send_keys`, `send_enter`, `send_raw`
+  `send_keys`, `send_enter`, `send_raw`, `pane_command` (processo in primo piano),
+  `close_foreground` (chiude la TUI/processo attivo nella pane)
 - **Esecuzione con attesa**: `run_and_wait` (comando in tmux detached, attende il
   completamento e ritorna l'output), `broadcast_wait` (idem su più host)
 - **Comandi**: `run_command` (batch su un host), `run_command_many` (parallelo)
+- **Trasferimento file (scp/SFTP)**: `sftp_download` (host→locale),
+  `sftp_upload` (locale→host), `transfer_file` (host→host via temp locale,
+  riporta `bytes` e `md5`; usalo quando i due host non si raggiungono)
 - **Snippet/broadcast**: `list_snippets`, `add_snippet`, `remove_snippet`,
   `broadcast` (`mode=tmux|direct`)
 - **Tunnel**: `list_tunnels`, `list_tunnels_all`, `start_tunnel`, `stop_tunnel`,
@@ -55,6 +59,12 @@ l'output: l'**attach interattivo resta all'utente** (dalla TUI o dal terminale).
    crea una sessione `bcast-<snippet>-<host>-<ts>` per host; in `mode="direct"`
    restituisce subito stdout/exit code. Per controllare i risultati tmux, polla
    `capture_pane` sulla sessione indicata nel risultato.
+7. **Chiudere un processo/TUI in una sessione** (es. opencode, vim, un comando lungo):
+   prima `pane_command(alias, session)` per sapere *cosa* gira — se è solo una shell
+   non c'è nulla da chiudere; poi `close_foreground(alias, session, method="auto")`,
+   che invia una sequenza di chiusura (default: escalation `C-c` → `C-c` → `C-d`) e
+   ricontrolla dopo ogni passo. Metodi: `auto | sigint | sigint2 | eof | exit`.
+   Usalo invece di indovinare i tasti con `send_raw`.
 7. **Cerchi qualcosa in una sessione?**: `find_in_sessions(alias, pattern)` cerca
    una regex nelle pane di tutte le sessioni di un host.
 8. **Attach dell'utente**: informa l'utente del nome sessione così può

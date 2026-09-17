@@ -74,6 +74,9 @@ def test_tools_registered(tmp_path):
         "stop_tunnels",
         "list_audit_logs",
         "read_audit_log",
+        "sftp_download",
+        "sftp_upload",
+        "transfer_file",
     }
     assert expected <= names
 
@@ -443,3 +446,114 @@ def test_rotations_roundtrip(tmp_path):
     assert "rimossa" in out
     out = _run(_call(mcp, "list_rotations", {}))
     assert "prod" not in out
+
+
+# ---------- trasferimento file ----------
+
+
+def test_sftp_download(monkeypatch, tmp_path):
+    from bravoric_ssh_client.ssh import file_ops
+
+    def fake_download(host, remote, local, password, **kw):
+        Path(local).write_text("hello\n")
+        return file_ops.ScpResult(ok=True)
+
+    monkeypatch.setattr(file_ops, "download", fake_download)
+    mcp = BravoricMcp(config=make_cfg(tmp_path))
+    out = _run(
+        _call(
+            mcp,
+            "sftp_download",
+            {"alias": "alpha", "remote": "/r/x.zip", "local": str(tmp_path / "x.zip")},
+        )
+    )
+    assert '"ok": true' in out
+    assert '"host": "alpha"' in out
+    assert (tmp_path / "x.zip").read_text() == "hello\n"
+
+
+def test_sftp_upload(monkeypatch, tmp_path):
+    from bravoric_ssh_client.ssh import file_ops
+
+    local = tmp_path / "x.zip"
+    local.write_bytes(b"data")
+    seen: dict[str, str] = {}
+
+    def fake_upload(host, local, remote, password, **kw):
+        seen["remote"] = remote
+        return file_ops.ScpResult(ok=True)
+
+    monkeypatch.setattr(file_ops, "upload", fake_upload)
+    mcp = BravoricMcp(config=make_cfg(tmp_path))
+    out = _run(
+        _call(
+            mcp,
+            "sftp_upload",
+            {"alias": "alpha", "local": str(local), "remote": "/r/x.zip"},
+        )
+    )
+    assert '"ok": true' in out
+    assert seen["remote"] == "/r/x.zip"
+
+
+def test_transfer_file(monkeypatch, tmp_path):
+    import hashlib
+
+    from bravoric_ssh_client.ssh import file_ops
+
+    payload = b"archive-payload-test"
+    uploaded: dict[str, object] = {}
+
+    def fake_download(host, remote, local, password, **kw):
+        Path(local).write_bytes(payload)
+        return file_ops.ScpResult(ok=True)
+
+    def fake_upload(host, local, remote, password, **kw):
+        uploaded["data"] = Path(local).read_bytes()
+        uploaded["remote"] = remote
+        return file_ops.ScpResult(ok=True)
+
+    monkeypatch.setattr(file_ops, "download", fake_download)
+    monkeypatch.setattr(file_ops, "upload", fake_upload)
+    mcp = BravoricMcp(config=make_cfg(tmp_path))
+    out = _run(
+        _call(
+            mcp,
+            "transfer_file",
+            {
+                "src_alias": "alpha",
+                "src_remote": "/r/src.zip",
+                "dst_alias": "alpha",
+                "dst_remote": "/r/dst.zip",
+            },
+        )
+    )
+    assert uploaded["data"] == payload
+    assert uploaded["remote"] == "/r/dst.zip"
+    assert '"ok": true' in out
+    assert f'"md5": "{hashlib.md5(payload).hexdigest()}"' in out
+
+
+def test_transfer_file_download_failure(monkeypatch, tmp_path):
+    from bravoric_ssh_client.ssh import file_ops
+
+    monkeypatch.setattr(
+        file_ops,
+        "download",
+        lambda host, remote, local, password, **kw: file_ops.ScpResult(ok=False, stderr="no route"),
+    )
+    mcp = BravoricMcp(config=make_cfg(tmp_path))
+    out = _run(
+        _call(
+            mcp,
+            "transfer_file",
+            {
+                "src_alias": "alpha",
+                "src_remote": "/r/src.zip",
+                "dst_alias": "alpha",
+                "dst_remote": "/r/dst.zip",
+            },
+        )
+    )
+    assert '"ok": false' in out
+    assert '"stage": "download"' in out

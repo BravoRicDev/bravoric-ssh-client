@@ -20,6 +20,34 @@ from .shellutil import sh_quote, write_askpass_helper, write_askpass_helper_sing
 
 DEFAULT_CONNECT_TIMEOUT = "4"
 
+# Shell/processi che indicano "nessun processo in primo piano" (pane idle).
+# NB: 'node' NON è incluso: molte TUI (es. opencode) girano proprio come 'node'.
+SHELL_COMMANDS = {
+    "bash", "zsh", "sh", "dash", "fish", "ksh", "tcsh", "csh", "ash",
+    "login", "tmux", "nu", "xonsh", "elvish", "oil", "osh", "pwsh",
+}
+
+# Delimitatore "impossibile": separa i campi di una formattazione tmux senza
+# collidere con path/titoli che possono contenere spazi, pipe o altri separatori.
+PANE_DELIM = "|||__BRAVORIC_DELIM__|||"
+WINDOW_DELIM = "|||__BRAVORIC_WIN__|||"
+
+
+def clean_cmd(raw: str) -> str:
+    """Nome base del processo in primo piano (senza path né '-' iniziale)."""
+    lines = (raw or "").strip().splitlines()
+    if not lines:
+        return ""
+    return lines[0].strip().lstrip("-").split("/")[-1]
+
+
+def _safe_int(value: str, default: int = 0) -> int:
+    """Converte in int tollerando valori vuoti o sporchi di tmux."""
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
 
 @dataclass
 class ListSessionsResult:
@@ -268,6 +296,71 @@ def tmux_list_windows(host: Host, name: str, cfg: SshConfig | None = None) -> Tm
     return run_tmux_action(host, f"tmux list-windows -t {_sh_quote(name)}", cfg)
 
 
+@dataclass
+class TmuxWindowInfo:
+    """Descrizione strutturata di una finestra tmux."""
+
+    index: int = 0
+    name: str = ""
+    active: bool = False
+    pane_count: int = 1
+    layout: str = ""
+
+
+@dataclass
+class WindowListResult:
+    """Esito della lettura strutturata delle finestre di una sessione."""
+
+    ok: bool = False
+    error: str = ""
+    windows: list[TmuxWindowInfo] = field(default_factory=list)
+
+
+def tmux_list_windows_parsed(
+    host: Host, session: str, cfg: SshConfig | None = None
+) -> WindowListResult:
+    """Elenca le finestre di una sessione in forma strutturata (indice, nome, …)."""
+    fmt = WINDOW_DELIM.join(
+        [
+            "#{window_index}",
+            "#{window_name}",
+            "#{window_active}",
+            "#{window_panes}",
+            "#{window_layout}",
+        ]
+    )
+    res = run_tmux_action(
+        host, f"tmux list-windows -t {_sh_quote(session)} -F {_sh_quote(fmt)}", cfg
+    )
+    if not res.ok:
+        return WindowListResult(
+            ok=False, error=(res.stderr or "").strip() or "list-windows fallito"
+        )
+    windows: list[TmuxWindowInfo] = []
+    for line in (res.stdout or "").strip().splitlines():
+        parts = line.split(WINDOW_DELIM)
+        if len(parts) < 4:
+            continue
+        windows.append(
+            TmuxWindowInfo(
+                index=_safe_int(parts[0]),
+                name=parts[1],
+                active=parts[2].strip() == "1",
+                pane_count=_safe_int(parts[3], default=1),
+                layout=parts[4] if len(parts) > 4 else "",
+            )
+        )
+    return WindowListResult(ok=True, windows=windows)
+
+
+def tmux_select_window(
+    host: Host, session: str, window_index: int | str, cfg: SshConfig | None = None
+) -> TmuxActionResult:
+    """Rende attiva (visibile) la finestra ``window_index`` della sessione."""
+    target = f"{session}:{window_index}"
+    return run_tmux_action(host, f"tmux select-window -t {_sh_quote(target)}", cfg)
+
+
 def tmux_capture_pane(
     host: Host,
     session: str,
@@ -275,15 +368,18 @@ def tmux_capture_pane(
     *,
     lines: int = 200,
     window: str | None = None,
+    escape: bool = False,
 ) -> TmuxActionResult:
     """Cattura il contenuto della sessione tmux remota (ultime ``lines`` righe).
 
     ``window`` opzionale: ``session:index`` per catturare una finestra specifica.
+    ``escape`` opzionale: se True, include i codici escape di colore e stile (-e).
     """
     target = session if window is None else f"{session}:{window}"
+    esc_flag = "-e " if escape else ""
     return run_tmux_action(
         host,
-        f"tmux capture-pane -p -t {_sh_quote(target)} -S -{int(lines)}",
+        f"tmux capture-pane {esc_flag}-p -t {_sh_quote(target)} -S -{int(lines)}",
         cfg,
     )
 
@@ -309,6 +405,120 @@ def tmux_send_raw(
 ) -> TmuxActionResult:
     """Invia tasti tmux non letterali (es. 'C-c', 'Up', 'BSpace')."""
     return run_tmux_action(host, f"tmux send-keys -t {_sh_quote(session)} {keys}", cfg)
+
+
+def tmux_pane_command(
+    host: Host, session: str, cfg: SshConfig | None = None
+) -> TmuxActionResult:
+    """Restituisce il comando in primo piano nella pane attiva (es. 'node', 'bash').
+
+    Serve a capire se nella sessione gira una TUI/processo o solo la shell.
+    """
+    return run_tmux_action(
+        host,
+        f"tmux display-message -p -t {_sh_quote(session)} '#{{pane_current_command}}'",
+        cfg,
+    )
+
+
+@dataclass
+class PaneInfoResult:
+    """Ispazione atomica della pane attiva (processo, CWD, PID, titolo, geometria)."""
+
+    ok: bool = False
+    error: str = ""
+    command: str = ""
+    cwd: str = ""
+    pid: int = 0
+    title: str = ""
+    width: int = 0
+    height: int = 0
+    is_shell: bool = False
+
+
+def tmux_pane_info(
+    host: Host, session: str, cfg: SshConfig | None = None
+) -> PaneInfoResult:
+    """Legge in UNA sola chiamata processo, CWD, PID, titolo e dimensioni della pane.
+
+    Ritorna anche ``is_shell``: True se il processo in primo piano è una shell
+    (pane idle, nessun comando/TUI attivo).
+    """
+    fmt = PANE_DELIM.join(
+        [
+            "#{pane_current_command}",
+            "#{pane_current_path}",
+            "#{pane_pid}",
+            "#{pane_title}",
+            "#{pane_width}",
+            "#{pane_height}",
+        ]
+    )
+    res = run_tmux_action(
+        host,
+        f"tmux display-message -p -t {_sh_quote(session)} {_sh_quote(fmt)}",
+        cfg,
+    )
+    if not res.ok:
+        return PaneInfoResult(
+            ok=False, error=(res.stderr or "").strip() or f"exit {res.ok}"
+        )
+    parts = (res.stdout or "").strip().split(PANE_DELIM)
+    if len(parts) < 6:
+        return PaneInfoResult(ok=False, error="Formato output tmux non valido")
+    cmd = clean_cmd(parts[0])
+    return PaneInfoResult(
+        ok=True,
+        command=cmd,
+        cwd=parts[1],
+        pid=_safe_int(parts[2]),
+        title=parts[3],
+        width=_safe_int(parts[4]),
+        height=_safe_int(parts[5]),
+        is_shell=cmd in SHELL_COMMANDS,
+    )
+
+
+def tmux_paste_buffer(
+    host: Host,
+    session: str,
+    content: str,
+    cfg: SshConfig | None = None,
+    *,
+    bracketed: bool = True,
+    buffer_name: str | None = None,
+) -> TmuxActionResult:
+    """Incolla ``content`` nella sessione usando un buffer tmux (bracketed paste).
+
+    Il testo viene caricato in un buffer tmux dedicato passando per base64: niente
+    quoting ambiguo, niente file temporanei e nessuna differenza tra host locale e
+    remoto. Con ``bracketed=True`` l'incolla usa ``paste-buffer -p`` così le TUI
+    (editor, agenti) ricevono i marcatori di bracketed paste e non corrompono
+    l'indentazione né scatenano auto-completamenti a metà riga.
+    """
+    import base64
+    import time
+
+    cfg = cfg or SshConfig()
+    name = buffer_name or f"bravoric_transfer_{int(time.time() * 1000)}"
+    b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
+    load_cmd = f"printf %s {_sh_quote(b64)} | base64 -d | tmux load-buffer -b {_sh_quote(name)} -"
+    load = run_tmux_action(host, load_cmd, cfg)
+    if not load.ok:
+        return TmuxActionResult(
+            ok=False,
+            stdout=load.stdout,
+            stderr=(load.stderr or "").strip() or "load-buffer fallito",
+        )
+    flag = "-p " if bracketed else ""
+    res = run_tmux_action(
+        host,
+        f"tmux paste-buffer {flag}-b {_sh_quote(name)} -t {_sh_quote(session)}",
+        cfg,
+    )
+    # Pulizia del buffer dedicato (best-effort: non deve influenzare l'esito).
+    run_tmux_action(host, f"tmux delete-buffer -b {_sh_quote(name)} 2>/dev/null", cfg)
+    return res
 
 
 def tmux_new_window(
