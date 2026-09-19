@@ -996,6 +996,100 @@ class BravoricMcp:
             ]
         )
 
+    # ---------- ispezione e file ad alta efficienza ----------
+
+    def search_files(
+        self,
+        alias: str,
+        path: str = ".",
+        pattern: str = "*",
+        mode: str = "compact",
+        text: str = "",
+        max_results: int = 50,
+        include_hidden: bool = False,
+        timeout: int = 30,
+    ) -> str:
+        """Cerca file sul filesystem dell'host in modo strutturato e leggero.
+
+        mode:
+          - 'compact': array di soli percorsi relativi (1 riga per file, minimo consumo token).
+          - 'metadata': array con percorsi, dimensione in byte e timestamp di modifica.
+          - 'grep': cerca file che corrispondono al pattern e contengono il testo specificato.
+        """
+        from .ssh.inspection import remote_search_files
+
+        host = self._host(alias)
+        res = remote_search_files(
+            host,
+            self._ssh_cfg(),
+            path=path,
+            pattern=pattern,
+            mode=mode,
+            text=text,
+            max_results=int(max_results),
+            include_hidden=bool(include_hidden),
+            timeout=int(timeout),
+        )
+        return self._dump(res)
+
+    def read_file(
+        self,
+        alias: str,
+        path: str,
+        offset: int = 1,
+        limit: int = 100,
+        unit: str = "lines",
+        timeout: int = 30,
+    ) -> str:
+        """Legge una porzione mirata di un file (lines o bytes) per preservare il contesto."""
+        from .ssh.inspection import remote_read_file
+
+        host = self._host(alias)
+        res = remote_read_file(
+            host,
+            self._ssh_cfg(),
+            path=path,
+            offset=int(offset),
+            limit=int(limit),
+            unit=unit,
+            timeout=int(timeout),
+        )
+        return self._dump(res)
+
+    def git_status(
+        self,
+        alias: str,
+        path: str = ".",
+        timeout: int = 30,
+    ) -> str:
+        """Restituisce lo stato sintetico di un repository git in JSON compatto."""
+        from .ssh.inspection import remote_git_status
+
+        host = self._host(alias)
+        res = remote_git_status(
+            host,
+            self._ssh_cfg(),
+            path=path,
+            timeout=int(timeout),
+        )
+        return self._dump(res)
+
+    def host_health(
+        self,
+        alias: str,
+        timeout: int = 30,
+    ) -> str:
+        """Restituisce carico CPU, RAM libera, spazio disco e container Docker attivi."""
+        from .ssh.inspection import remote_host_health
+
+        host = self._host(alias)
+        res = remote_host_health(
+            host,
+            self._ssh_cfg(),
+            timeout=int(timeout),
+        )
+        return self._dump(res)
+
     # ---------- snippet / broadcast ----------
 
     def list_snippets(self) -> str:
@@ -1469,6 +1563,26 @@ class BravoricMcp:
                 "transfer_file",
                 "transfer_file",
                 "Trasferisce un file tra due host via temp locale (md5 riportato).",
+            ),
+            (
+                "search_files",
+                "search_files",
+                "Cerca file per nome/glob sull'host con modalità compact, metadata o grep.",
+            ),
+            (
+                "read_file",
+                "read_file",
+                "Legge una porzione mirata di un file (lines o bytes) con limit e offset.",
+            ),
+            (
+                "git_status",
+                "git_status",
+                "Stato sintetico di un repository git in JSON compatto (branch, commit, modifiche).",
+            ),
+            (
+                "host_health",
+                "host_health",
+                "Quadro sintetico risorse host: CPU load, RAM libera, spazio disco e container Docker.",
             ),
         ]
         for name, method_name, description in specs:

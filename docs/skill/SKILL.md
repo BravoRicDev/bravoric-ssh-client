@@ -28,6 +28,11 @@ l'output: l'**attach interattivo resta all'utente** (dalla TUI o dal terminale).
 - **Trasferimento file (scp/SFTP)**: `sftp_download` (host→locale),
   `sftp_upload` (locale→host), `transfer_file` (host→host via temp locale,
   riporta `bytes` e `md5`; usalo quando i due host non si raggiungono)
+- **Ispezione & file ad alta efficienza (risparmio token)**:
+  - `search_files(alias, path, pattern, mode="compact"|"metadata"|"grep", text=..., max_results=50)`: ricerca file nativa remota (3 modalità in un unico tool).
+  - `read_file(alias, path, offset=1, limit=100, unit="lines"|"bytes")`: lettura parziale strutturata con offset e limit (evita dump giganti).
+  - `git_status(alias, path=".")`: stato compatto di un repo git in JSON (branch, commit, numero modificati/untracked, clean flag).
+  - `host_health(alias)`: panoramica sintetica istantanea di risorse (CPU load avg, RAM usata/libera, spazio disco / e ~, container Docker attivi).
 - **Snippet/broadcast**: `list_snippets`, `add_snippet`, `remove_snippet`,
   `broadcast` (`mode=tmux|direct`)
 - **Tunnel**: `list_tunnels`, `list_tunnels_all`, `start_tunnel`, `stop_tunnel`,
