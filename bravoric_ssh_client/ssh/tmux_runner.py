@@ -245,7 +245,7 @@ def _audit_pipe_cmds(host: Host, session: str, out_gz: Path) -> tuple[str, str]:
     if host.is_local():
         log = str(out_gz)
         mkdir = f"mkdir -p {_sh_quote(str(out_gz.parent))}"
-        pipe = tmux_pipe_pane_enable(esc, log)
+        pipe = tmux_pipe_pane_enable(esc, out_gz)
     else:
         remote_dir = "$HOME/.bravoric-ssh-client/logs"
         log = f"{remote_dir}/{out_gz.name}"
@@ -264,22 +264,31 @@ def _attach_cmd(
 
     ``base``: "attach", "attach -r" oppure "new -A -s". Con ``create=True``
     (nuova sessione) il pipe-pane parte dopo la creazione, prima dell'attach.
+    Applica inoltre `refresh-client -S` e `set-option -w window-size largest`
+    per forzare l'espansione della finestra alla massima dimensione del client al volo.
     """
     esc = session.replace("'", "'\\''")
+    # Subshell che in background appena dopo l'attach/new forza il refresh della dimensione del client
+    # e rimuove eventuali vincoli manuali sulla finestra
+    maximize = (
+        f"(sleep 0.1; tmux set-option -t '{esc}' -w window-size largest 2>/dev/null; "
+        f"tmux refresh-client -S -t '{esc}' 2>/dev/null) &"
+    )
+
     if base.startswith("new"):
         target = f"'{esc}'"  # new usa -s <nome>
         if audit is None:
-            return _tmux_with_title(host.alias, f"{base} {target}")
+            return _tmux_wrap_full(host.alias, f"{maximize} tmux {base} {target}")
     else:
         target = f"-t '{esc}'"  # attach usa -t <sessione>
         if audit is None:
-            return _tmux_with_title(host.alias, f"{base} {target}")
+            return _tmux_wrap_full(host.alias, f"{maximize} tmux {base} {target}")
     enable, disable = _audit_pipe_cmds(host, session, audit)
     if create:
         # nuova sessione: crea detached, avvia il pipe, poi aggancia
-        body = f"tmux {base} -d -s '{esc}' 2>/dev/null; {enable}; tmux attach -t '{esc}'; {disable}"
+        body = f"tmux {base} -d -s '{esc}' 2>/dev/null; {enable}; {maximize} tmux attach -t '{esc}'; {disable}"
     else:
-        body = f"{enable}; tmux {base} {target}; {disable}"
+        body = f"{enable}; {maximize} tmux {base} {target}; {disable}"
     return _tmux_wrap_full(host.alias, body)
 
 
