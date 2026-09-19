@@ -640,8 +640,11 @@ class RecentScreen(Screen):
         self.app.push_screen(SessionScreen(self._config, host))  # type: ignore[attr-defined]
 
     def action_reopen_all(self) -> None:
-        """Riapre tutte le sessioni recenti (senza doppioni) in finestre separate."""
+        """Riapre tutte le sessioni recenti (senza doppioni) in finestre separate,
+        con un piccolo delay tra un terminale e l'altro per evitare sovraccarichi
+        su macchine lente o server che applicano rate-limit/ban."""
         import shutil
+        import time
 
         unique: dict[str, tuple[str, str]] = {}
         for e in self._entries:
@@ -666,6 +669,9 @@ class RecentScreen(Screen):
                         stderr=subprocess.DEVNULL,
                     )
                     launched += 1
+                    # Piccolo delay per non sovraccaricare macchine lente o server
+                    if launched < len(unique):
+                        time.sleep(0.5)
                 except OSError as exc:
                     self.app.notify(f"Errore apertura {host_alias}: {exc}", severity="error")  # type: ignore[attr-defined]
             else:
@@ -1475,7 +1481,10 @@ class RotationCatalogScreen(Screen):
         self.app.notify(f"Rotazione '{name}' eliminata")  # type: ignore[attr-defined]
 
     def action_reopen_all(self) -> None:
-        """Riapre tutte le sessioni di TUTTE le rotazioni salvate (senza doppioni)."""
+        """Riapre tutte le sessioni di TUTTE le rotazioni salvate (senza doppioni),
+        con un piccolo delay tra un terminale e l'altro."""
+        import time
+
         unique: dict[str, tuple[str, str]] = {}
         for r in self._rotations:
             for h, s in r.unique_entries():
@@ -1498,6 +1507,9 @@ class RotationCatalogScreen(Screen):
                         stderr=subprocess.DEVNULL,
                     )
                     launched += 1
+                    # Piccolo delay per non sovraccaricare macchine lente o server
+                    if launched < len(unique):
+                        time.sleep(0.5)
                 except OSError as exc:
                     self.app.notify(f"Errore apertura {host_alias}: {exc}", severity="error")  # type: ignore[attr-defined]
             else:
