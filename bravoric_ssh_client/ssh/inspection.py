@@ -20,7 +20,9 @@ if TYPE_CHECKING:
     from .adapter import SshConfig
 
 
-def _run_py(host: Host, ssh_cfg: SshConfig | None, script: str, timeout: int = 30) -> dict[str, Any]:
+def _run_py(
+    host: Host, ssh_cfg: SshConfig | None, script: str, timeout: int = 30
+) -> dict[str, Any]:
     """Esegue uno script python3 su un host (locale o remoto via SSH) e ne restituisce il JSON."""
     from .broadcast import run_snippet_on_host
 
@@ -42,6 +44,7 @@ def _run_py(host: Host, ssh_cfg: SshConfig | None, script: str, timeout: int = 3
 # ---------------------------------------------------------------------------
 # 1. search_files
 # ---------------------------------------------------------------------------
+
 
 def remote_search_files(
     host: Host,
@@ -99,12 +102,18 @@ for dirpath, dirnames, filenames in os.walk(root):
             if mode == 'grep':
                 if not text:
                     continue
+                # Memory-efficient: stream line-by-line instead of reading
+                # entire file into RAM. Skip files >100MB to avoid OOM.
                 try:
+                    st = os.stat(full_path)
+                    if st.st_size > 100 * 1024 * 1024:  # 100 MB threshold
+                        continue
                     with open(full_path, 'r', encoding='utf-8', errors='ignore') as fp:
-                        content = fp.read()
-                        if text in content:
-                            results.append(rel_path)
-                            count += 1
+                        for line in fp:  # O(1) memory — streams line by line
+                            if text in line:
+                                results.append(rel_path)
+                                count += 1
+                                break  # stop reading after first match
                 except Exception:
                     pass
             elif mode == 'metadata':
@@ -142,6 +151,7 @@ print(json.dumps({{
 # ---------------------------------------------------------------------------
 # 2. read_file
 # ---------------------------------------------------------------------------
+
 
 def remote_read_file(
     host: Host,
@@ -191,13 +201,27 @@ try:
             "content": content
         }}))
     else: # lines (1-indexed)
+        import subprocess
         lines = []
         total_lines = 0
+        early_exit = False
         with open(filepath, 'r', encoding='utf-8', errors='replace') as fp:
             for idx, line in enumerate(fp, start=1):
                 total_lines = idx
                 if idx >= offset and len(lines) < limit:
                     lines.append(line)
+                # Early exit: stop once we have enough lines past offset
+                elif idx >= offset + limit:
+                    early_exit = True
+                    break
+        # If we exited early, get exact total_lines via wc -l (fast, no Python mem)
+        if early_exit:
+            try:
+                wc = subprocess.run(['wc', '-l', filepath], capture_output=True, text=True, timeout=5)
+                if wc.returncode == 0:
+                    total_lines = int(wc.stdout.split()[0])
+            except Exception:
+                pass  # keep estimated count
         print(json.dumps({{
             "path": filepath,
             "unit": "lines",
@@ -217,6 +241,7 @@ except Exception as e:
 # ---------------------------------------------------------------------------
 # 3. git_status
 # ---------------------------------------------------------------------------
+
 
 def remote_git_status(
     host: Host,
@@ -285,6 +310,7 @@ print(json.dumps({{
 # ---------------------------------------------------------------------------
 # 4. host_health
 # ---------------------------------------------------------------------------
+
 
 def remote_host_health(
     host: Host,

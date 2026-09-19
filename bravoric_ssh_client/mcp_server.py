@@ -622,9 +622,7 @@ class BravoricMcp:
 
     def select_window(self, alias: str, session: str, window_index: int) -> str:
         """Rende attiva (visibile) una finestra della sessione."""
-        res = adapter.tmux_select_window(
-            self._host(alias), session, window_index, self._ssh_cfg()
-        )
+        res = adapter.tmux_select_window(self._host(alias), session, window_index, self._ssh_cfg())
         return (
             f"finestra {window_index} attivata in '{session}'"
             if res.ok
@@ -657,9 +655,7 @@ class BravoricMcp:
             return f"errore: {(res.stderr or '').strip()}"
         return res.stdout or "(pane vuoto)"
 
-    def pane_diff(
-        self, alias: str, session: str, max_lines: int = 200, reset: bool = False
-    ) -> str:
+    def pane_diff(self, alias: str, session: str, max_lines: int = 200, reset: bool = False) -> str:
         """Snapshot & diff incrementale dell'output di una pane (token saver).
 
         Al primo campionamento restituisce una preview (baseline). Ai successivi
@@ -671,9 +667,7 @@ class BravoricMcp:
         key = (host.alias, session)
         if reset:
             self.pane_diffs.reset(key)
-        cap = adapter.tmux_capture_pane(
-            host, session, self._ssh_cfg(), lines=int(max_lines)
-        )
+        cap = adapter.tmux_capture_pane(host, session, self._ssh_cfg(), lines=int(max_lines))
         if not cap.ok:
             return self._dump(
                 {"ok": False, "error": (cap.stderr or "").strip() or "capture fallita"}
@@ -736,9 +730,7 @@ class BravoricMcp:
             host, session, content, self._ssh_cfg(), bracketed=bool(bracketed)
         )
         if not res.ok:
-            return self._dump(
-                {"ok": False, "error": (res.stderr or "").strip() or "paste fallita"}
-            )
+            return self._dump({"ok": False, "error": (res.stderr or "").strip() or "paste fallita"})
         if enter:
             adapter.tmux_send_enter(host, session, self._ssh_cfg())
         return self._dump(
@@ -858,16 +850,42 @@ class BravoricMcp:
             )
         return f"chiuso '{before}' nella sessione '{session}' (sequenza: {', '.join(done)})"
 
-    def restart_foreground(
-        self, alias: str, session: str, fallback_command: str = ""
-    ) -> str:
+    def _try_recover_last_command(self, host: Host, session: str, cfg) -> str | None:
+        """Tenta di recuperare l'ultimo comando dalla history della shell remota."""
+        import time
+        # Prova bash history, zsh history, fc -ln -1
+        cmds = [
+            "tail -n 1 ~/.bash_history 2>/dev/null",
+            "tail -n 1 ~/.zsh_history 2>/dev/null | sed 's/^: [0-9]*:[0-9]*;//'",
+            "fc -ln -1 2>/dev/null",
+        ]
+        for cmd in cmds:
+            try:
+                res = adapter.run_tmux_action(host, f"tmux send-keys -t {adapter._sh_quote(session)} -l {adapter._sh_quote(cmd)}", cfg)
+                if not res.ok:
+                    continue
+                adapter.run_tmux_action(host, f"tmux send-keys -t {adapter._sh_quote(session)} Enter", cfg)
+                time.sleep(0.3)
+                cap = adapter.tmux_capture_pane(host, session, cfg, lines=5)
+                if cap.ok:
+                    lines = cap.stdout.strip().splitlines()
+                    for line in reversed(lines):
+                        line = line.strip()
+                        if line and not line.startswith(cmd) and not line.startswith('tail') and not line.startswith('fc'):
+                            return line
+            except Exception:
+                continue
+        return None
+
+    def restart_foreground(self, alias: str, session: str, fallback_command: str = "") -> str:
         """Chiude il processo in primo piano e lo rilancia (riavvio deterministico).
 
         Unisce ``close_foreground`` e il rilancio in una sola operazione sicura per
         ripristinare processi incastrati (agente crashato, server bloccato). Il
         comando da rilanciare è ``fallback_command``; se vuoto si rilancia lo stesso
-        processo rilevato prima della chiusura. Se la pane era già una shell serve
-        un ``fallback_command`` esplicito (altrimenti non c'è nulla da riavviare).
+        processo rilevato prima della chiusura. Se la pane era già una shell, prova
+        a recuperare l'ultimo comando dalla history della shell; se fallisce richiede
+        un ``fallback_command`` esplicito.
         """
         import time
 
@@ -877,6 +895,9 @@ class BravoricMcp:
         # 1) rileva il processo attuale
         info = adapter.tmux_pane_info(host, session, cfg)
         if not info.ok:
+            # Distingue sessione mancante da errore pane
+            if "not found" in info.error.lower() or "does not exist" in info.error.lower():
+                return self._dump({"ok": False, "host": alias, "session": session, "error": f"sessione '{session}' non esistente su '{alias}'"})
             return self._dump(
                 {
                     "ok": False,
@@ -888,20 +909,22 @@ class BravoricMcp:
         previous = info.command
         fallback = (fallback_command or "").strip()
 
-        # 2) pane già idle (shell): lancia direttamente il comando richiesto
+        # 2) pane già idle (shell): prova a recuperare l'ultimo comando dalla history
         if info.is_shell:
             if not fallback:
-                return self._dump(
-                    {
-                        "ok": False,
-                        "host": alias,
-                        "session": session,
-                        "error": (
-                            "Nessun processo attivo e nessun comando specificato "
-                            "per il riavvio"
-                        ),
-                    }
-                )
+                recovered = self._try_recover_last_command(host, session, cfg)
+                if recovered:
+                    fallback = recovered
+                else:
+                    return self._dump(
+                        {
+                            "ok": False,
+                            "host": alias,
+                            "session": session,
+                            "error": ("Nessun processo attivo, history shell vuota/irraggiungibile, "
+                                      "e nessun fallback_command specificato"),
+                        }
+                    )
             adapter.tmux_send_keys(host, session, fallback, cfg)
             adapter.tmux_send_enter(host, session, cfg)
             return self._dump(
@@ -911,6 +934,17 @@ class BravoricMcp:
                     "session": session,
                     "restarted": fallback,
                     "method": "direct_launch",
+                }
+            )
+
+        # Guard: previous non deve essere vuoto
+        if not previous:
+            return self._dump(
+                {
+                    "ok": False,
+                    "host": alias,
+                    "session": session,
+                    "error": "Impossibile determinare il comando precedente (pane_command vuoto)",
                 }
             )
 
@@ -924,14 +958,31 @@ class BravoricMcp:
             )
 
         # 4) attesa attiva del rilascio del prompt shell (max 5 s)
+        #    Verifica anche che la sessione esista ancora
         deadline = time.time() + 5.0
         prompt_ready = False
+        session_gone = False
         while time.time() < deadline:
+            # Verifica che la sessione esista ancora
+            exists = adapter.run_tmux_action(host, f"tmux has-session -t {adapter._sh_quote(session)} 2>/dev/null", cfg)
+            if not exists.ok:
+                session_gone = True
+                break
             cur = adapter.tmux_pane_info(host, session, cfg)
             if cur.ok and cur.is_shell:
                 prompt_ready = True
                 break
             time.sleep(0.5)
+        if session_gone:
+            return self._dump(
+                {
+                    "ok": False,
+                    "host": alias,
+                    "session": session,
+                    "closed": previous,
+                    "error": "La sessione tmux è scomparsa durante la chiusura",
+                }
+            )
         if not prompt_ready:
             return self._dump(
                 {
@@ -956,8 +1007,6 @@ class BravoricMcp:
                 "status": "success",
             }
         )
-
-    # ---------- comandi batch ----------
 
     def run_command(self, alias: str, command: str, timeout: int = 60) -> str:
         from .ssh.broadcast import run_snippet_on_host
@@ -1277,12 +1326,16 @@ class BravoricMcp:
 
     # ---------- cronologia / rotazioni ----------
 
-    def session_history(self) -> str:
-        """Cronologia delle sessioni recenti (history.json)."""
+    def session_history(self, limit: int = 50) -> str:
+        """Cronologia delle sessioni recenti (history.json).
+
+        ``limit``: numero massimo di voci da restituire (default 50, max 200).
+        """
         from .history import load_history
 
         entries = load_history(self._load_config())
-        return self._dump([{"host": e.host, "session": e.session} for e in entries[:50]])
+        limit = max(0, min(int(limit), 200))
+        return self._dump([{"host": e.host, "session": e.session} for e in entries[:limit]])
 
     def list_rotations(self) -> str:
         """Elenca i profili di rotazione salvati."""
