@@ -312,6 +312,204 @@ print(json.dumps({{
 # ---------------------------------------------------------------------------
 
 
+def remote_host_top_processes(
+    host: Host,
+    ssh_cfg: SshConfig | None,
+    limit: int = 10,
+    sort_by: str = "cpu",
+    timeout: int = 30,
+) -> dict[str, Any]:
+    """Restituisce i processi più pesanti per CPU o RAM sull'host."""
+    try:
+        sort_by = sort_by.lower()
+        if sort_by not in ("cpu", "mem", "rss"):
+            sort_by = "cpu"
+        limit_val = max(1, min(int(limit), 50))
+    except (ValueError, TypeError):
+        sort_by = "cpu"
+        limit_val = 10
+
+    script = f"""
+import subprocess, json
+
+sort_key = {json.dumps(sort_by)}
+limit = {limit_val}
+
+procs = []
+try:
+    p = subprocess.run(['ps', '-eo', 'pid,pcpu,rss,args'], capture_output=True, text=True, timeout=10)
+    if p.returncode == 0:
+        lines = p.stdout.strip().splitlines()
+        for line in lines[1:]:
+            parts = line.split(None, 3)
+            if len(parts) >= 4:
+                try:
+                    pid = parts[0]
+                    cpu = float(parts[1])
+                    rss = int(parts[2])
+                    comm = parts[3]
+                    name = comm.split()[0].split('/')[-1] if comm else 'unknown'
+                    procs.append({{"pid": pid, "name": name, "rss_kb": rss, "cpu_pct": cpu, "command": comm}})
+                except ValueError:
+                    continue
+except Exception:
+    pass
+
+if sort_key == "cpu":
+    procs.sort(key=lambda x: x.get("cpu_pct", 0.0), reverse=True)
+else:
+    procs.sort(key=lambda x: x.get("rss_kb", 0), reverse=True)
+
+result = procs[:limit]
+print(json.dumps({{"processes": result, "sort_by": sort_key, "limit": limit}}))
+"""
+    return _run_py(host, ssh_cfg, script, timeout=timeout)
+
+
+def remote_write_file(
+    host: Host,
+    ssh_cfg: SshConfig | None,
+    path: str,
+    content: str,
+    mode: str = "overwrite",
+    timeout: int = 30,
+) -> dict[str, Any]:
+    """Scrive o appende contenuto a un file remoto.
+
+    mode: ``overwrite`` (sovrascrive) | ``append`` (aggiunge in coda).
+    Il contenuto viene passato via base64 per evitare problemi di quoting.
+    """
+    import base64
+
+    b64_content = base64.b64encode(content.encode("utf-8")).decode("ascii")
+    op = "append" if mode.lower() == "append" else "overwrite"
+
+    script = f"""
+import base64, os, json, sys
+path = {json.dumps(path)}
+op = {json.dumps(op)}
+b64 = {json.dumps(b64_content)}
+try:
+    data = base64.b64decode(b64)
+    if op == 'overwrite':
+        with open(path, 'wb') as f:
+            f.write(data)
+    else:
+        d = os.path.dirname(path)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        with open(path, 'ab') as f:
+            f.write(data)
+    size = os.path.getsize(path)
+    print(json.dumps({{\"ok\": True, \"path\": path, \"bytes\": size, \"mode\": op}}))
+except Exception as e:
+    print(json.dumps({{\"ok\": False, \"error\": str(e)}}))
+"""
+    return _run_py(host, ssh_cfg, script, timeout=timeout)
+
+
+def remote_edit_file(
+    host: Host,
+    ssh_cfg: SshConfig | None,
+    path: str,
+    pattern: str,
+    replacement: str = "",
+    count: int = 0,
+    timeout: int = 30,
+) -> dict[str, Any]:
+    """Sostituisce pattern nel file remoto con sed/espressione regolare semplice.
+
+    count=0 sostituisce tutte le occorrenze. count>0 limita il numero di sostituzioni.
+    """
+    import shlex
+
+    try:
+        count_val = int(count)
+        if count_val < 0:
+            count_val = 0
+    except (ValueError, TypeError):
+        count_val = 0
+
+    safe_pattern = shlex.quote(pattern)
+    safe_replacement = shlex.quote(replacement)
+    safe_path = shlex.quote(path)
+
+    if count_val > 0:
+        sed_cmd = f"sed -i '0,/{safe_pattern}/s/{safe_pattern}/{safe_replacement}/' {safe_path}"
+    else:
+        sed_cmd = f"sed -i 's/{safe_pattern}/{safe_replacement}/g' {safe_path}"
+
+    script = f"""
+import subprocess, json, os
+path = {json.dumps(path)}
+cmd = {json.dumps(sed_cmd)}
+try:
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or 'sed failed')
+    size = os.path.getsize(path) if os.path.exists(path) else 0
+    print(json.dumps({{"ok": True, "path": path, "bytes": size}}))
+except Exception as e:
+    print(json.dumps({{"ok": False, "error": str(e)}}))
+"""
+    return _run_py(host, ssh_cfg, script, timeout=timeout)
+
+
+def remote_session_audit_log(
+    host: Host,
+    ssh_cfg: SshConfig | None,
+    session: str,
+    max_lines: int = 0,
+    timeout: int = 60,
+) -> dict[str, Any]:
+    """Legge il log di audit di una sessione tmux specifica."""
+    import json
+
+    try:
+        safe_max = max(0, int(max_lines)) if max_lines else 0
+    except (ValueError, TypeError):
+        safe_max = 0
+    # Build script using string concatenation to avoid f-string complexity
+    script_parts = [
+        "import subprocess, json, os\n",
+        f"session = {json.dumps(session)}\n",
+        f"max_lines = {safe_max}\n",
+        "\n",
+        "home = os.path.expanduser('~')\n",
+        "log_base = os.path.join(home, '.bravoric-ssh-client', 'logs')\n",
+        "\n",
+        "if not os.path.isdir(log_base):\n",
+        "    print(json.dumps({'ok': False, 'error': 'directory logs non trovata'}))\n",
+        "    exit(0)\n",
+        "\n",
+        "files = []\n",
+        "for f in os.listdir(log_base):\n",
+        "    if session in f and f.endswith('.log.gz'):\n",
+        "        files.append(os.path.join(log_base, f))\n",
+        "\n",
+        "if not files:\n",
+        "    print(json.dumps({'ok': False, 'error': 'nessun log trovato', 'session': session}))\n",
+        "    exit(0)\n",
+        "\n",
+        "log_file = sorted(files)[-1]\n",
+        "\n",
+        "try:\n",
+        "    cmd = ['zcat', log_file]\n",
+        "    if max_lines > 0:\n",
+        "        cmd += ['-n', str(max_lines)]\n",
+        f"    result = subprocess.run(cmd, capture_output=True, text=True, timeout={timeout})\n",
+        "    if result.returncode == 0:\n",
+        "        lines = result.stdout.strip().splitlines() if result.stdout else []\n",
+        "        print(json.dumps({'ok': True, 'file': log_file, 'lines': len(lines), 'content': result.stdout[:50000]}))\n",
+        "    else:\n",
+        "        print(json.dumps({'ok': False, 'error': 'lettura fallita', 'stderr': result.stderr}))\n",
+        "except Exception as e:\n",
+        "    print(json.dumps({'ok': False, 'error': str(e)}))\n",
+    ]
+    script = "".join(script_parts)
+    return _run_py(host, ssh_cfg, script, timeout=timeout)
+
+
 def remote_host_health(
     host: Host,
     ssh_cfg: SshConfig | None,

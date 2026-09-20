@@ -1162,6 +1162,99 @@ class BravoricMcp:
         )
         return self._dump(res)
 
+    def host_top_processes(
+        self,
+        alias: str,
+        limit: int = 10,
+        sort_by: str = "cpu",
+        timeout: int = 30,
+    ) -> str:
+        """Restituisce i processi più pesanti per CPU o RAM sull'host."""
+        from .ssh.inspection import remote_host_top_processes
+
+        host = self._host(alias)
+        res = remote_host_top_processes(
+            host,
+            self._ssh_cfg(),
+            limit=int(limit),
+            sort_by=sort_by,
+            timeout=int(timeout),
+        )
+        return self._dump(res)
+
+    def write_file(
+        self,
+        alias: str,
+        path: str,
+        content: str = "",
+        mode: str = "overwrite",
+        timeout: int = 30,
+    ) -> str:
+        """Scrive o appende contenuto a un file remoto.
+
+        mode: 'overwrite' (sovrascrive) | 'append' (aggiunge in coda).
+        Il contenuto viene passato via base64 per evitare problemi di quoting.
+        """
+        from .ssh.inspection import remote_write_file
+
+        host = self._host(alias)
+        res = remote_write_file(
+            host,
+            self._ssh_cfg(),
+            path=path,
+            content=content,
+            mode=mode,
+            timeout=int(timeout),
+        )
+        return self._dump(res)
+
+    def edit_file(
+        self,
+        alias: str,
+        path: str,
+        pattern: str,
+        replacement: str = "",
+        count: int = 0,
+        timeout: int = 30,
+    ) -> str:
+        """Sostituisce pattern nel file remoto con sed/espressione regolare semplice.
+
+        count=0 sostituisce tutte le occorrenze. count>0 limita il numero di sostituzioni.
+        """
+        from .ssh.inspection import remote_edit_file
+
+        host = self._host(alias)
+        res = remote_edit_file(
+            host,
+            self._ssh_cfg(),
+            path=path,
+            pattern=pattern,
+            replacement=replacement,
+            count=int(count),
+            timeout=int(timeout),
+        )
+        return self._dump(res)
+
+    def session_audit_log(
+        self,
+        alias: str,
+        session: str,
+        max_lines: int = 0,
+        timeout: int = 60,
+    ) -> str:
+        """Legge il log di audit di una sessione tmux specifica."""
+        from .ssh.inspection import remote_session_audit_log
+
+        host = self._host(alias)
+        res = remote_session_audit_log(
+            host,
+            self._ssh_cfg(),
+            session=session,
+            max_lines=int(max_lines),
+            timeout=int(timeout),
+        )
+        return self._dump(res)
+
     # ---------- snippet / broadcast ----------
 
     def list_snippets(self) -> str:
@@ -1659,6 +1752,26 @@ class BravoricMcp:
                 "host_health",
                 "host_health",
                 "Quadro sintetico risorse host: CPU load, RAM libera, spazio disco e container Docker.",
+            ),
+            (
+                "host_top_processes",
+                "host_top_processes",
+                "Top processi per CPU/RAM sull'host (limit, sort_by='cpu'|'mem').",
+            ),
+            (
+                "write_file",
+                "write_file",
+                "Scrive o appende contenuto a un file remoto (mode='overwrite'|'append').",
+            ),
+            (
+                "edit_file",
+                "edit_file",
+                "Sostituisce pattern in file remoto con sed/espressione regolare semplice.",
+            ),
+            (
+                "session_audit_log",
+                "session_audit_log",
+                "Legge il log di audit di una sessione tmux specifica dall'host.",
             ),
         ]
         for name, method_name, description in specs:
