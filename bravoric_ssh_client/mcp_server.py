@@ -1255,55 +1255,114 @@ class BravoricMcp:
         )
         return self._dump(res)
 
-
-    def tmux_run_and_wait_prompt(self, alias: str, session: str, command: str, prompt_regex: str, timeout: int = 30) -> str:
+    def tmux_run_and_wait_prompt(
+        self, alias: str, session: str, command: str, prompt_regex: str, timeout: int = 30
+    ) -> str:
         """Invia un comando a tmux e attende il prompt."""
         from .ssh.inspection import remote_tmux_run_and_wait_prompt
-        host = self._host(alias)
-        return self._dump(remote_tmux_run_and_wait_prompt(host, self._ssh_cfg(), session, command, prompt_regex, int(timeout)))
 
-    def replace_block(self, alias: str, path: str, old_text: str, new_text: str, timeout: int = 30) -> str:
+        host = self._host(alias)
+        return self._dump(
+            remote_tmux_run_and_wait_prompt(
+                host, self._ssh_cfg(), session, command, prompt_regex, int(timeout)
+            )
+        )
+
+    def replace_block(
+        self, alias: str, path: str, old_text: str, new_text: str, timeout: int = 30
+    ) -> str:
         """Sostituzione esatta multi-riga sicura (alternativa a sed)."""
         from .ssh.inspection import remote_replace_block
-        host = self._host(alias)
-        return self._dump(remote_replace_block(host, self._ssh_cfg(), path, old_text, new_text, int(timeout)))
 
-    def project_tree(self, alias: str, path: str = ".", max_depth: int = 3, timeout: int = 30) -> str:
+        host = self._host(alias)
+        return self._dump(
+            remote_replace_block(host, self._ssh_cfg(), path, old_text, new_text, int(timeout))
+        )
+
+    def project_tree(
+        self, alias: str, path: str = ".", max_depth: int = 3, timeout: int = 30
+    ) -> str:
         """Albero del progetto token-optimized (salta .git, node_modules ecc.)."""
         from .ssh.inspection import remote_project_tree
-        host = self._host(alias)
-        return self._dump(remote_project_tree(host, self._ssh_cfg(), path, int(max_depth), int(timeout)))
 
-    def manage_service(self, alias: str, name: str, action: str = "status", manager: str = "systemd", timeout: int = 30) -> str:
+        host = self._host(alias)
+        return self._dump(
+            remote_project_tree(host, self._ssh_cfg(), path, int(max_depth), int(timeout))
+        )
+
+    def manage_service(
+        self,
+        alias: str,
+        name: str,
+        action: str = "status",
+        manager: str = "systemd",
+        timeout: int = 30,
+    ) -> str:
         """Gestione strutturata di servizi (systemd, docker)."""
         from .ssh.inspection import remote_manage_service
-        host = self._host(alias)
-        return self._dump(remote_manage_service(host, self._ssh_cfg(), name, action, manager, int(timeout)))
 
-    def read_service_logs(self, alias: str, name: str, lines: int = 100, level: str = "", grep: str = "", timeout: int = 30) -> str:
+        host = self._host(alias)
+        return self._dump(
+            remote_manage_service(host, self._ssh_cfg(), name, action, manager, int(timeout))
+        )
+
+    def read_service_logs(
+        self,
+        alias: str,
+        name: str,
+        lines: int = 100,
+        level: str = "",
+        grep: str = "",
+        timeout: int = 30,
+    ) -> str:
         """Estrazione filtrata lato server dei log di un servizio."""
         from .ssh.inspection import remote_read_service_logs
+
         host = self._host(alias)
-        return self._dump(remote_read_service_logs(host, self._ssh_cfg(), name, int(lines), level, grep, int(timeout)))
+        return self._dump(
+            remote_read_service_logs(
+                host, self._ssh_cfg(), name, int(lines), level, grep, int(timeout)
+            )
+        )
 
     def host_network_ports(self, alias: str, timeout: int = 30) -> str:
         """Mappatura strutturata JSON delle porte in ascolto."""
         from .ssh.inspection import remote_host_network_ports
+
         host = self._host(alias)
         return self._dump(remote_host_network_ports(host, self._ssh_cfg(), int(timeout)))
 
-    def manage_packages(self, alias: str, action: str, packages: list[str], timeout: int = 300) -> str:
+    def manage_packages(
+        self, alias: str, action: str, packages: list[str], timeout: int = 300
+    ) -> str:
         """Gestore pacchetti silenzioso per apt/dnf."""
         from .ssh.inspection import remote_manage_packages
-        host = self._host(alias)
-        return self._dump(remote_manage_packages(host, self._ssh_cfg(), action, packages, int(timeout)))
 
-    def run_sql_query(self, alias: str, engine: str, db: str, query: str, user: str = "", password: str = "", host_addr: str = "", timeout: int = 60) -> str:
+        host = self._host(alias)
+        return self._dump(
+            remote_manage_packages(host, self._ssh_cfg(), action, packages, int(timeout))
+        )
+
+    def run_sql_query(
+        self,
+        alias: str,
+        engine: str,
+        db: str,
+        query: str,
+        user: str = "",
+        password: str = "",
+        host_addr: str = "",
+        timeout: int = 60,
+    ) -> str:
         """Esecuzione SQL formattata JSON compatta."""
         from .ssh.inspection import remote_run_sql_query
-        host = self._host(alias)
-        return self._dump(remote_run_sql_query(host, self._ssh_cfg(), engine, db, query, user, password, host_addr, int(timeout)))
 
+        host = self._host(alias)
+        return self._dump(
+            remote_run_sql_query(
+                host, self._ssh_cfg(), engine, db, query, user, password, host_addr, int(timeout)
+            )
+        )
 
     # ---------- snippet / broadcast ----------
 
@@ -1818,14 +1877,42 @@ class BravoricMcp:
                 "edit_file",
                 "Sostituisce pattern in file remoto con sed/espressione regolare semplice.",
             ),
-            ("tmux_run_and_wait_prompt", "tmux_run_and_wait_prompt", "Esegue comando in tmux e attende match del prompt regex."),
+            (
+                "tmux_run_and_wait_prompt",
+                "tmux_run_and_wait_prompt",
+                "Esegue comando in tmux e attende match del prompt regex.",
+            ),
             ("replace_block", "replace_block", "Sostituzione multi-riga esatta sicura in un file."),
-            ("project_tree", "project_tree", "Restituisce un albero di directory JSON-optimized per token."),
-            ("manage_service", "manage_service", "Restituisce JSON strutturato stato o gestisce systemd/docker."),
-            ("read_service_logs", "read_service_logs", "Legge log di sistema/servizio con filtraggio lato server."),
-            ("host_network_ports", "host_network_ports", "Restituisce array JSON con le porte locali in ascolto."),
-            ("manage_packages", "manage_packages", "Installa/aggiorna pacchetti APT/DNF restituendo JSON compatto."),
-            ("run_sql_query", "run_sql_query", "Esegue query psql/mysql/sqlite e restituisce output strutturato."),
+            (
+                "project_tree",
+                "project_tree",
+                "Restituisce un albero di directory JSON-optimized per token.",
+            ),
+            (
+                "manage_service",
+                "manage_service",
+                "Restituisce JSON strutturato stato o gestisce systemd/docker.",
+            ),
+            (
+                "read_service_logs",
+                "read_service_logs",
+                "Legge log di sistema/servizio con filtraggio lato server.",
+            ),
+            (
+                "host_network_ports",
+                "host_network_ports",
+                "Restituisce array JSON con le porte locali in ascolto.",
+            ),
+            (
+                "manage_packages",
+                "manage_packages",
+                "Installa/aggiorna pacchetti APT/DNF restituendo JSON compatto.",
+            ),
+            (
+                "run_sql_query",
+                "run_sql_query",
+                "Esegue query psql/mysql/sqlite e restituisce output strutturato.",
+            ),
             (
                 "session_audit_log",
                 "session_audit_log",

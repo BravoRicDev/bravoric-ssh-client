@@ -810,7 +810,7 @@ if grep:
         exit(0)
 
 try:
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout={timeout-5})
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout={timeout - 5})
     out = p.stdout[-500000:] # prevent OOM in processing
     if grep:
         import re
