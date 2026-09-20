@@ -1,6 +1,6 @@
 ---
 name: bravoric-ssh
-description: "Use bravoric-ssh MCP server (tools bravoric-ssh_*) to control SSH hosts and tmux sessions managed by the user's bravoric-ssh-client: list hosts, create/drive detached tmux sessions (send-keys/capture-pane/paste), run batch commands in parallel, broadcast snippets, inspect and safely edit remote files with token-efficient tools (search_files, read_file, write_file, edit_file, git_status, host_health, host_top_processes), manage SSH tunnels and read audit logs. Use when the user asks to check, control, or drive their servers/tmux sessions through the MCP server."
+description: "Use bravoric-ssh MCP server (tools bravoric-ssh_*) to control SSH hosts and tmux sessions managed by the user's bravoric-ssh-client: list hosts, create/drive detached tmux sessions (send-keys/capture-pane/paste/tmux_run_and_wait_prompt), run batch commands in parallel, broadcast snippets, inspect and safely edit remote files (search_files, read_file, write_file, edit_file, replace_block, project_tree, git_status), inspect host resources and network (host_health, host_top_processes, host_network_ports), manage remote services, packages and databases (manage_service, read_service_logs, manage_packages, run_sql_query), manage SSH tunnels and read audit logs (74 tools). Use when the user asks to check, control, or drive their servers/tmux sessions through the MCP server."
 ---
 
 # bravoric-ssh MCP — Guida Operativa Ufficiale per gli Agenti
@@ -47,12 +47,15 @@ Per non saturare la finestra di contesto con dump giganteschi, usa i **4 tool di
 - `hosts_summary`: dashboard completa di tutti gli host (reachability, tmux attivo, conteggio sessioni).
 - `host_health(alias)`: diagnostica hardware e container del server remoto (CPU load, RAM libera, disco `/` e `/home`, Docker).
 - `host_top_processes(alias, limit=10, sort_by="cpu"|"mem")`: elenca i processi più pesanti per consumo CPU o RAM sull'host remoto.
+- `host_network_ports(alias)`: elenca le porte di rete TCP/UDP in ascolto sull'host remoto con processi, PID e interfacce (netstat/ss strutturato).
 
 ### File Remoti (Efficienza, Scrittura e Trasferimento)
 - `search_files(alias, path, pattern, mode, text, max_results)`: cerca file e contenuti (grep remoto).
 - `read_file(alias, path, offset, limit, unit)`: lettura selettiva a blocchi senza `cat`/`head`.
+- `project_tree(alias, path=".", max_depth=3)`: albero compatto della directory remota con profondità massima configurabile.
 - `write_file(alias, path, content="", mode="overwrite"|"append")`: scrive o appende contenuto a un file remoto via base64 (nessun problema di escaping bash o quoting).
 - `edit_file(alias, path, pattern, replacement="", count=0)`: sostituzione sicura di pattern/stringhe all'interno di file remoti con sed (count=0 sostituisce tutte le occorrenze).
+- `replace_block(alias, path, old_text, new_text)`: sostituzione chirurgica e transazionale di interi blocchi multiriga di codice su file remoti.
 - `git_status(alias, path)`: stato git strutturato e leggero.
 - `sftp_download(alias, remote_path, local_path)`: scarica da server a locale.
 - `sftp_upload(alias, local_path, remote_path)`: carica da locale a server.
@@ -66,6 +69,7 @@ Per non saturare la finestra di contesto con dump giganteschi, usa i **4 tool di
 - `pane_diff(alias, session, max_lines=200, reset=False)`: **diff incrementale** dell'output della pane (restituisce SOLO le righe comparse dall'ultima lettura, azzerando lo spreco di token nei controlli periodici).
 - `pane_info(alias, session)`: restituisce processo attivo, CWD, PID, titolo e geometria della pane.
 - `paste(alias, session, content, bracketed: true, enter: true)`: incolla testo in modo sicuro con bracketed paste.
+- `tmux_run_and_wait_prompt(alias, session, command, prompt_regex, timeout=30)`: esegue un comando in una sessione tmux e attende il prompt atteso (regex), restituendo l'output generato senza blocchi.
 - `pane_command(alias, session)`: restituisce il comando attivo nella pane (es. `opencode`, `pi`, `node`, `bash`).
 - `close_foreground(alias, session, method="auto")`: chiude in sicurezza la TUI/processo attivo (escalation ordinata `C-c` -> `C-d`).
 - `restart_foreground(alias, session, fallback_command="")`: chiude e riavvia in modo pulito e deterministico il processo in primo piano (recupera automaticamente l'ultimo comando dalla history shell, o usa il fallback).
@@ -75,6 +79,12 @@ Per non saturare la finestra di contesto con dump giganteschi, usa i **4 tool di
 - `session_history(limit=50)`: cronologia delle sessioni recenti (parametro `limit` max 200).
 - `list_windows_parsed(alias, session)`: finestre in formato strutturato (id, nome, attiva).
 - `select_window(alias, session, window_index)`: seleziona e attiva una finestra della sessione.
+
+### Servizi, Pacchetti & Database Remoti
+- `manage_service(alias, name, action="status", manager="systemd"|"docker")`: gestione ciclo di vita servizi remoti (status, start, stop, restart, enable, disable) con systemd o container Docker.
+- `read_service_logs(alias, name, lines=100, level="", grep="")`: ispezione log remoti di servizi/container con filtro per gravità e grep.
+- `manage_packages(alias, action="install"|"remove"|"update", packages=[...])`: gestione pacchetti remoti (apt, dnf, pacman, brew) con rilevamento automatico del package manager.
+- `run_sql_query(alias, engine="postgres"|"mysql"|"sqlite", db="...", query="...")`: esecuzione sicura di query SQL su database remoti con formattazione tabulare pulita.
 
 ### Esecuzione Comandi Batch
 - `run_command(alias, command)`: esegue un comando bash sul server e torna exit code, stdout e stderr.
