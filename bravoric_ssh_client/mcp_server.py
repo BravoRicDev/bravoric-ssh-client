@@ -853,6 +853,7 @@ class BravoricMcp:
     def _try_recover_last_command(self, host: Host, session: str, cfg) -> str | None:
         """Tenta di recuperare l'ultimo comando dalla history della shell remota."""
         import time
+
         # Prova bash history, zsh history, fc -ln -1
         cmds = [
             "tail -n 1 ~/.bash_history 2>/dev/null",
@@ -861,17 +862,28 @@ class BravoricMcp:
         ]
         for cmd in cmds:
             try:
-                res = adapter.run_tmux_action(host, f"tmux send-keys -t {adapter._sh_quote(session)} -l {adapter._sh_quote(cmd)}", cfg)
+                res = adapter.run_tmux_action(
+                    host,
+                    f"tmux send-keys -t {adapter._sh_quote(session)} -l {adapter._sh_quote(cmd)}",
+                    cfg,
+                )
                 if not res.ok:
                     continue
-                adapter.run_tmux_action(host, f"tmux send-keys -t {adapter._sh_quote(session)} Enter", cfg)
+                adapter.run_tmux_action(
+                    host, f"tmux send-keys -t {adapter._sh_quote(session)} Enter", cfg
+                )
                 time.sleep(0.3)
                 cap = adapter.tmux_capture_pane(host, session, cfg, lines=5)
                 if cap.ok:
                     lines = cap.stdout.strip().splitlines()
                     for line in reversed(lines):
                         line = line.strip()
-                        if line and not line.startswith(cmd) and not line.startswith('tail') and not line.startswith('fc'):
+                        if (
+                            line
+                            and not line.startswith(cmd)
+                            and not line.startswith("tail")
+                            and not line.startswith("fc")
+                        ):
                             return line
             except Exception:
                 continue
@@ -897,7 +909,14 @@ class BravoricMcp:
         if not info.ok:
             # Distingue sessione mancante da errore pane
             if "not found" in info.error.lower() or "does not exist" in info.error.lower():
-                return self._dump({"ok": False, "host": alias, "session": session, "error": f"sessione '{session}' non esistente su '{alias}'"})
+                return self._dump(
+                    {
+                        "ok": False,
+                        "host": alias,
+                        "session": session,
+                        "error": f"sessione '{session}' non esistente su '{alias}'",
+                    }
+                )
             return self._dump(
                 {
                     "ok": False,
@@ -921,8 +940,10 @@ class BravoricMcp:
                             "ok": False,
                             "host": alias,
                             "session": session,
-                            "error": ("Nessun processo attivo, history shell vuota/irraggiungibile, "
-                                      "e nessun fallback_command specificato"),
+                            "error": (
+                                "Nessun processo attivo, history shell vuota/irraggiungibile, "
+                                "e nessun fallback_command specificato"
+                            ),
                         }
                     )
             adapter.tmux_send_keys(host, session, fallback, cfg)
@@ -964,7 +985,9 @@ class BravoricMcp:
         session_gone = False
         while time.time() < deadline:
             # Verifica che la sessione esista ancora
-            exists = adapter.run_tmux_action(host, f"tmux has-session -t {adapter._sh_quote(session)} 2>/dev/null", cfg)
+            exists = adapter.run_tmux_action(
+                host, f"tmux has-session -t {adapter._sh_quote(session)} 2>/dev/null", cfg
+            )
             if not exists.ok:
                 session_gone = True
                 break

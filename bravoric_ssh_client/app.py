@@ -13,6 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from textual import getters
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Grid, Vertical
@@ -260,7 +261,13 @@ class BravoricApp(App):
         self.exit()
 
 
-class HostScreen(Screen):
+class BravoricScreen(Screen):
+    """Base delle schermate: `self.app` è tipizzato come `BravoricApp`."""
+
+    app = getters.app(BravoricApp)
+
+
+class HostScreen(BravoricScreen):
     """Lista degli host configurati."""
 
     BINDINGS = [
@@ -365,7 +372,7 @@ class HostScreen(Screen):
     async def _load_pw_marks(self) -> None:
         """Calcola in background l'indicatore password per gli host."""
         try:
-            marks = await _io(self.app._password_marks, list(self._all_hosts))  # type: ignore[attr-defined]
+            marks = await _io(self.app._password_marks, list(self._all_hosts))
         finally:
             self._pw_loading = False
         self._pw_cache.update(marks)
@@ -388,7 +395,7 @@ class HostScreen(Screen):
         """Semaforo tunnel: 🟢 attivo, 🔴 configurato ma spento, vuoto se nessuno."""
         if not h.tunnels:
             return ""
-        active = self.app.tunnels.any_active(h.alias)  # type: ignore[attr-defined]
+        active = self.app.tunnels.any_active(h.alias)
         if active:
             return "[green]🟢[/green]"
         return "[red]🔴[/red]"
@@ -402,7 +409,7 @@ class HostScreen(Screen):
             return
         self._ping = {h.alias: None for h in hosts}
         self._populate()
-        self.app.notify(f"Test di {len(hosts)} host…")  # type: ignore[attr-defined]
+        self.app.notify(f"Test di {len(hosts)} host…")
         results = await asyncio.gather(*(self._ping_one(h) for h in hosts))
         # results è lista di (alias, ok); aggiorna lo stato finale in un colpo
         for alias, ok in results:
@@ -410,7 +417,7 @@ class HostScreen(Screen):
         self._populate()
         self.app.notify(
             f"Test completato: {sum(1 for _, ok in results if ok)}/{len(results)} raggiungibili"
-        )  # type: ignore[attr-defined]
+        )
 
     async def _ping_one(self, h: Host) -> tuple[str, bool]:
         ok, _ = await _io(ssh_adapter.tcp_ping, h)
@@ -425,15 +432,15 @@ class HostScreen(Screen):
         """Cicla: tutti -> gruppo1 -> gruppo2 -> ... -> tutti."""
         options = [None, *self._groups]
         if not self._groups:
-            self.app.notify("Nessun gruppo configurato (usa il form per assegnarne)")  # type: ignore[attr-defined]
+            self.app.notify("Nessun gruppo configurato (usa il form per assegnarne)")
             return
         cur = self._group_filter
         idx = options.index(cur) if cur in options else 0
         self._group_filter = options[(idx + 1) % len(options)]
         if self._group_filter:
-            self.app.notify(f"Gruppo: {self._group_filter}")  # type: ignore[attr-defined]
+            self.app.notify(f"Gruppo: {self._group_filter}")
         else:
-            self.app.notify("Gruppo: tutti")  # type: ignore[attr-defined]
+            self.app.notify("Gruppo: tutti")
         self._populate()
 
     def _selected_host(self) -> Host | None:
@@ -448,17 +455,17 @@ class HostScreen(Screen):
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         host = self._selected_host()
         if host:
-            self.app.open_sessions(host)  # type: ignore[attr-defined]
+            self.app.open_sessions(host)
 
     def action_add_host(self) -> None:
-        self.app.push_screen(HostFormScreen(self._config, None))  # type: ignore[attr-defined]
+        self.app.push_screen(HostFormScreen(self._config, None))
 
     def action_edit_host(self) -> None:
         host = self._selected_host()
         if host:
-            self.app.push_screen(HostFormScreen(self._config, host))  # type: ignore[attr-defined]
+            self.app.push_screen(HostFormScreen(self._config, host))
         else:
-            self.app.notify("Nessun host selezionato")  # type: ignore[attr-defined]
+            self.app.notify("Nessun host selezionato")
 
     def action_delete_host(self) -> None:
         host = self._selected_host()
@@ -467,9 +474,9 @@ class HostScreen(Screen):
             def do_delete() -> None:
                 if host in self._config.hosts:
                     self._config.hosts.remove(host)
-                self.app._hosts_changed()  # type: ignore[attr-defined]
+                self.app._hosts_changed()
 
-            self.app.push_screen(  # type: ignore[attr-defined]
+            self.app.push_screen(
                 ConfirmScreen(
                     f"Eliminare l'host '{host.alias}'?",
                     f"{host.effective_user()}@{host.host}:{host.port}",
@@ -477,12 +484,12 @@ class HostScreen(Screen):
                 )
             )
         else:
-            self.app.notify("Nessun host selezionato")  # type: ignore[attr-defined]
+            self.app.notify("Nessun host selezionato")
 
     def action_duplicate_host(self) -> None:
         host = self._selected_host()
         if not host:
-            self.app.notify("Nessun host selezionato")  # type: ignore[attr-defined]
+            self.app.notify("Nessun host selezionato")
             return
         new_host = Host(
             alias=f"{host.alias}-copia",
@@ -493,67 +500,67 @@ class HostScreen(Screen):
             cred_key=host.cred_key,
         )
         self._config.hosts.append(new_host)
-        self.app._persist_and_reload()  # type: ignore[attr-defined]
+        self.app._persist_and_reload()
 
     def action_password(self) -> None:
         host = self._selected_host()
         if host:
-            self.app.push_screen(PasswordScreen(self._config, host))  # type: ignore[attr-defined]
+            self.app.push_screen(PasswordScreen(self._config, host))
         else:
-            self.app.notify("Nessun host selezionato")  # type: ignore[attr-defined]
+            self.app.notify("Nessun host selezionato")
 
     async def action_test(self) -> None:
         host = self._selected_host()
         if not host:
-            self.app.notify("Nessun host selezionato")  # type: ignore[attr-defined]
+            self.app.notify("Nessun host selezionato")
             return
-        self.app.notify(f"Test di {host.alias}…")  # type: ignore[attr-defined]
+        self.app.notify(f"Test di {host.alias}…")
         ok, detail = await _io(ssh_adapter.tcp_ping, host)
         sev = "success" if ok else "error"
-        self.app.notify(f"{host.alias}: {detail}", severity=sev, timeout=5)  # type: ignore[attr-defined]
+        self.app.notify(f"{host.alias}: {detail}", severity=sev, timeout=5)
 
     def action_scp(self) -> None:
         host = self._selected_host()
         if host:
-            self.app.push_screen(ScpScreen(self._config, host))  # type: ignore[attr-defined]
+            self.app.push_screen(ScpScreen(self._config, host))
         else:
-            self.app.notify("Nessun host selezionato")  # type: ignore[attr-defined]
+            self.app.notify("Nessun host selezionato")
 
     def action_file_exchange(self) -> None:
         host = self._selected_host()
         if host:
-            self.app.push_screen(SftpTargetScreen(self._config, host))  # type: ignore[attr-defined]
+            self.app.push_screen(SftpTargetScreen(self._config, host))
         else:
-            self.app.notify("Nessun host selezionato")  # type: ignore[attr-defined]
+            self.app.notify("Nessun host selezionato")
 
     def action_recent(self) -> None:
         from .history import load_history
 
         entries = load_history(self._config)
         if not entries:
-            self.app.notify("Nessuna sessione recente (ancora nessun attach)")  # type: ignore[attr-defined]
+            self.app.notify("Nessuna sessione recente (ancora nessun attach)")
             return
-        self.app.push_screen(RecentScreen(self._config, entries))  # type: ignore[attr-defined]
+        self.app.push_screen(RecentScreen(self._config, entries))
 
     def action_observe(self) -> None:
         host = self._selected_host()
         if host:
-            self.app.push_screen(ObserveScreen(self._config, host))  # type: ignore[attr-defined]
+            self.app.push_screen(ObserveScreen(self._config, host))
         else:
-            self.app.notify("Nessun host selezionato")  # type: ignore[attr-defined]
+            self.app.notify("Nessun host selezionato")
 
     def action_rotations(self) -> None:
-        self.app.push_screen(RotationCatalogScreen(self._config))  # type: ignore[attr-defined]
+        self.app.push_screen(RotationCatalogScreen(self._config))
 
     def action_tunnels(self) -> None:
         host = self._selected_host()
         if host:
-            self.app.push_screen(TunnelScreen(self._config, host))  # type: ignore[attr-defined]
+            self.app.push_screen(TunnelScreen(self._config, host))
         else:
-            self.app.notify("Nessun host selezionato")  # type: ignore[attr-defined]
+            self.app.notify("Nessun host selezionato")
 
     def action_broadcast(self) -> None:
-        self.app.push_screen(SnippetCatalogScreen(self._config))  # type: ignore[attr-defined]
+        self.app.push_screen(SnippetCatalogScreen(self._config))
 
     def action_import_ssh(self) -> None:
         from .importers import import_from_remmina, import_from_ssh_config
@@ -571,35 +578,35 @@ class HostScreen(Screen):
                 total += t
                 added += a
             except Exception as exc:
-                self.app.notify(f"Errore import ssh_config: {exc}", severity="error", timeout=8)  # type: ignore[attr-defined]
+                self.app.notify(f"Errore import ssh_config: {exc}", severity="error", timeout=8)
         # 2) da Remmina (flatpak + legacy)
         try:
             t, a = import_from_remmina(out, provider=self._config.credential_provider, merge=True)
             total += t
             added += a
         except Exception as exc:
-            self.app.notify(f"Errore import Remmina: {exc}", severity="error", timeout=8)  # type: ignore[attr-defined]
+            self.app.notify(f"Errore import Remmina: {exc}", severity="error", timeout=8)
         if total == 0:
-            self.app.notify("Nessun host importabile", severity="error")  # type: ignore[attr-defined]
+            self.app.notify("Nessun host importabile", severity="error")
             return
         self._config.hosts = load_config(out).hosts
         self.reload_hosts()
-        self.app.notify(f"Import completato: {total} host ({added} nuovi)")  # type: ignore[attr-defined]
+        self.app.notify(f"Import completato: {total} host ({added} nuovi)")
 
     def action_refresh(self) -> None:
         try:
             self._config = load_config(self._config.path)
         except Exception as exc:
-            self.app.notify(f"Errore: {exc}", severity="error")  # type: ignore[attr-defined]
+            self.app.notify(f"Errore: {exc}", severity="error")
             return
         self.reload_hosts()
-        self.app.notify("Config ricaricata")  # type: ignore[attr-defined]
+        self.app.notify("Config ricaricata")
 
     def action_quit(self) -> None:
-        self.app.exit()  # type: ignore[attr-defined]
+        self.app.exit()
 
 
-class RecentScreen(Screen):
+class RecentScreen(BravoricScreen):
     """Sessioni tmux usate di recente: Enter per rientrarci."""
 
     BINDINGS = [
@@ -635,9 +642,9 @@ class RecentScreen(Screen):
         e = self._entries[event.list_view.index]
         host = self._config.host(e.host)
         if not host:
-            self.app.notify(f"Host '{e.host}' non trovato in config", severity="error")  # type: ignore[attr-defined]
+            self.app.notify(f"Host '{e.host}' non trovato in config", severity="error")
             return
-        self.app.push_screen(SessionScreen(self._config, host))  # type: ignore[attr-defined]
+        self.app.push_screen(SessionScreen(self._config, host))
 
     def action_reopen_all(self) -> None:
         """Riapre tutte le sessioni recenti (senza doppioni) in finestre separate,
@@ -651,7 +658,7 @@ class RecentScreen(Screen):
             if self._config.host(e.host):
                 unique.setdefault(f"{e.host}/{e.session}", (e.host, e.session))
         if not unique:
-            self.app.notify("Nessuna sessione da riaprire")  # type: ignore[attr-defined]
+            self.app.notify("Nessuna sessione da riaprire")
             return
         ptyxis = shutil.which("ptyxis") or shutil.which("gnome-terminal")
         wrap = str(Path.home() / ".local" / "bin" / "bravoric-ssh")
@@ -673,18 +680,18 @@ class RecentScreen(Screen):
                     if launched < len(unique):
                         time.sleep(0.5)
                 except OSError as exc:
-                    self.app.notify(f"Errore apertura {host_alias}: {exc}", severity="error")  # type: ignore[attr-defined]
+                    self.app.notify(f"Errore apertura {host_alias}: {exc}", severity="error")
             else:
                 # fallback: esci e apri solo la prima
-                self.app.notify("Nessun terminale GUI trovato; apri manualmente")  # type: ignore[attr-defined]
+                self.app.notify("Nessun terminale GUI trovato; apri manualmente")
                 break
-        self.app.notify(f"Aperte {launched} finestre ({len(unique)} sessioni uniche)")  # type: ignore[attr-defined]
+        self.app.notify(f"Aperte {launched} finestre ({len(unique)} sessioni uniche)")
 
     def action_back(self) -> None:
-        self.app.pop_screen()  # type: ignore[attr-defined]
+        self.app.pop_screen()
 
 
-class HostFormScreen(Screen):
+class HostFormScreen(BravoricScreen):
     """Form per aggiungere (host=None) o modificare un host."""
 
     BINDINGS = [
@@ -757,11 +764,11 @@ class HostFormScreen(Screen):
         try:
             port = int(f["port"])
         except ValueError:
-            self.app.notify("Porta non valida", severity="error")  # type: ignore[attr-defined]
+            self.app.notify("Porta non valida", severity="error")
             return
         auth = f["auth"]
         if auth not in AUTH_METHODS:
-            self.app.notify(f"auth non valido: {auth}", severity="error")  # type: ignore[attr-defined]
+            self.app.notify(f"auth non valido: {auth}", severity="error")
             return
         raw = {
             "host": f["host"],
@@ -784,29 +791,29 @@ class HostFormScreen(Screen):
         try:
             raw["cycle_interval"] = int(f["cycleinterval"])
         except ValueError:
-            self.app.notify("Intervallo rotazione non valido", severity="error")  # type: ignore[attr-defined]
+            self.app.notify("Intervallo rotazione non valido", severity="error")
             return
         try:
             parsed = _parse_host(f["alias"], raw, {})
         except ConfigError as exc:
-            self.app.notify(str(exc), severity="error")  # type: ignore[attr-defined]
+            self.app.notify(str(exc), severity="error")
             return
         # aggiorna o aggiunge
         if self._host is None:
             if self._config.host(parsed.alias):
-                self.app.notify(f"Alias '{parsed.alias}' già esistente", severity="error")  # type: ignore[attr-defined]
+                self.app.notify(f"Alias '{parsed.alias}' già esistente", severity="error")
                 return
             self._config.hosts.append(parsed)
         else:
             idx = self._config.hosts.index(self._host)
             self._config.hosts[idx] = parsed
-        self.app._hosts_changed()  # type: ignore[attr-defined]
+        self.app._hosts_changed()
 
     def action_cancel(self) -> None:
-        self.app.pop_screen()  # type: ignore[attr-defined]
+        self.app.pop_screen()
 
 
-class ConfirmScreen(Screen):
+class ConfirmScreen(BravoricScreen):
     """Conferma generica: titolo + messaggio + callback alla conferma."""
 
     BINDINGS = [
@@ -832,14 +839,14 @@ class ConfirmScreen(Screen):
     def action_confirm(self) -> None:
         self._on_confirm()
         # pop solo se la callback non ha già navigato (es. _hosts_changed fa pop)
-        if self.app.screen is self:  # type: ignore[attr-defined]
-            self.app.pop_screen()  # type: ignore[attr-defined]
+        if self.app.screen is self:
+            self.app.pop_screen()
 
     def action_cancel(self) -> None:
-        self.app.pop_screen()  # type: ignore[attr-defined]
+        self.app.pop_screen()
 
 
-class PasswordScreen(Screen):
+class PasswordScreen(BravoricScreen):
     """Imposta/rimuove la password per un host nel provider."""
 
     BINDINGS = [
@@ -854,7 +861,7 @@ class PasswordScreen(Screen):
         self._host = host
 
     def compose(self) -> ComposeResult:
-        has_pw = self.app._host_password_present(self._host)  # type: ignore[attr-defined]
+        has_pw = self.app._host_password_present(self._host)
         yield Header()
         with Vertical(id="pw-box"):
             yield Label(f"[b]Password per '{self._host.alias}'[/b]", classes="box-title")
@@ -873,22 +880,22 @@ class PasswordScreen(Screen):
     def action_save(self) -> None:
         value = self.query_one("#pw-input", Input).value
         if not value:
-            self.app.notify("Password vuota", severity="error")  # type: ignore[attr-defined]
+            self.app.notify("Password vuota", severity="error")
             return
-        if self.app._store_password(self._host, value):  # type: ignore[attr-defined]
-            self.app.notify("Password salvata")  # type: ignore[attr-defined]
-            self.app.pop_screen()  # type: ignore[attr-defined]
+        if self.app._store_password(self._host, value):
+            self.app.notify("Password salvata")
+            self.app.pop_screen()
 
     def action_clear_pw(self) -> None:
-        self.app._clear_password(self._host)  # type: ignore[attr-defined]
-        self.app.notify("Password rimossa")  # type: ignore[attr-defined]
-        self.app.pop_screen()  # type: ignore[attr-defined]
+        self.app._clear_password(self._host)
+        self.app.notify("Password rimossa")
+        self.app.pop_screen()
 
     def action_cancel(self) -> None:
-        self.app.pop_screen()  # type: ignore[attr-defined]
+        self.app.pop_screen()
 
 
-class ScpScreen(Screen):
+class ScpScreen(BravoricScreen):
     """Copia file da/verso un host via scp (upload/download)."""
 
     BINDINGS = [
@@ -922,7 +929,7 @@ class ScpScreen(Screen):
         local = self.query_one("#scp-local", Input).value.strip()
         remote = self.query_one("#scp-remote", Input).value.strip()
         if not local or not remote:
-            self.app.notify("Servono entrambi i percorsi", severity="error")  # type: ignore[attr-defined]
+            self.app.notify("Servono entrambi i percorsi", severity="error")
             return None
         return local, remote
 
@@ -933,8 +940,8 @@ class ScpScreen(Screen):
         if not paths:
             return
         local, remote = paths
-        password = self.app._password_for(self._host)  # type: ignore[attr-defined]
-        self.app.notify(f"Upload {local} → {remote}…")  # type: ignore[attr-defined]
+        password = self.app._password_for(self._host)
+        self.app.notify(f"Upload {local} → {remote}…")
         res = await self._run_in_thread(file_ops.upload, local, remote, password)
         self._report(res, "Upload")
 
@@ -945,8 +952,8 @@ class ScpScreen(Screen):
         if not paths:
             return
         local, remote = paths
-        password = self.app._password_for(self._host)  # type: ignore[attr-defined]
-        self.app.notify(f"Download {remote} → {local}…")  # type: ignore[attr-defined]
+        password = self.app._password_for(self._host)
+        self.app.notify(f"Download {remote} → {local}…")
         res = await self._run_in_thread(file_ops.download, remote, local, password)
         self._report(res, "Download")
 
@@ -958,19 +965,19 @@ class ScpScreen(Screen):
 
     def _report(self, res, what: str) -> None:
         if res.ok:
-            self.app.notify(f"{what} completato")  # type: ignore[attr-defined]
+            self.app.notify(f"{what} completato")
         else:
             self.app.notify(
                 f"{what} fallito: {res.stderr.strip() or res.stdout.strip() or 'errore'}",
                 severity="error",
                 timeout=8,
-            )  # type: ignore[attr-defined]
+            )
 
     def action_cancel(self) -> None:
-        self.app.pop_screen()  # type: ignore[attr-defined]
+        self.app.pop_screen()
 
 
-class SftpTargetScreen(Screen):
+class SftpTargetScreen(BravoricScreen):
     """Scegli il secondo lato dello scambio file: locale o un altro host."""
 
     BINDINGS = [
@@ -1021,12 +1028,12 @@ class SftpTargetScreen(Screen):
                 "Midnight Commander (mc) non installato: dnf install mc",
                 severity="error",
                 timeout=8,
-            )  # type: ignore[attr-defined]
+            )
             return
         ptyxis = shutil.which("ptyxis") or shutil.which("gnome-terminal")
         wrap = str(Path.home() / ".local" / "bin" / "bravoric-ssh")
         if not ptyxis:
-            self.app.notify("Nessun terminale GUI trovato; apri mc manualmente", severity="error")  # type: ignore[attr-defined]
+            self.app.notify("Nessun terminale GUI trovato; apri mc manualmente", severity="error")
             return
         # ptyxis -x esegue il PRIMO token come eseguibile: serve "sh -c '<comando unico>'".
         cmd = f"sh -c {_sh_quote(f'exec {_sh_quote(wrap)} --sftp {_sh_quote(host_a.alias)} {_sh_quote(host_b.alias)}')}"
@@ -1037,16 +1044,16 @@ class SftpTargetScreen(Screen):
                 stderr=subprocess.DEVNULL,
             )
         except OSError as exc:
-            self.app.notify(f"Errore apertura mc: {exc}", severity="error")  # type: ignore[attr-defined]
+            self.app.notify(f"Errore apertura mc: {exc}", severity="error")
             return
-        self.app.notify(f"Apertura commander: {host_a.alias} ↔ {host_b.alias}")  # type: ignore[attr-defined]
-        self.app.pop_screen()  # type: ignore[attr-defined]
+        self.app.notify(f"Apertura commander: {host_a.alias} ↔ {host_b.alias}")
+        self.app.pop_screen()
 
     def action_back(self) -> None:
-        self.app.pop_screen()  # type: ignore[attr-defined]
+        self.app.pop_screen()
 
 
-class TunnelScreen(Screen):
+class TunnelScreen(BravoricScreen):
     """Gestione dei tunnel SSH (port forwarding) di un host."""
 
     BINDINGS = [
@@ -1079,7 +1086,7 @@ class TunnelScreen(Screen):
         self._populate()
 
     def _populate(self) -> None:
-        active = self.app.tunnels.active(self._host.alias)  # type: ignore[attr-defined]
+        active = self.app.tunnels.active(self._host.alias)
         active_ports = {t.port for t in active}
         lv = self.query_one("#tunnel-list", ListView)
         lv.clear()
@@ -1118,53 +1125,53 @@ class TunnelScreen(Screen):
         return self._host.tunnels[lv.index]
 
     def action_new(self) -> None:
-        self.app.push_screen(TunnelFormScreen(self._config, self._host))  # type: ignore[attr-defined]
+        self.app.push_screen(TunnelFormScreen(self._config, self._host))
 
     def action_start(self) -> None:
         t = self._selected_tunnel()
         if not t:
-            self.app.notify("Nessun tunnel selezionato")  # type: ignore[attr-defined]
+            self.app.notify("Nessun tunnel selezionato")
             return
-        jump, jump_password = self.app._jump_for(self._host)  # type: ignore[attr-defined]
-        ok, msg = self.app.tunnels.start(  # type: ignore[attr-defined]
+        jump, jump_password = self.app._jump_for(self._host)
+        ok, msg = self.app.tunnels.start(
             self._host,
             t,
-            self.app._password_for(self._host),  # type: ignore[attr-defined]
-            password_resolver=self.app._password_for,  # type: ignore[attr-defined]
+            self.app._password_for(self._host),
+            password_resolver=self.app._password_for,
             jump_host=jump,
         )
-        self.app.notify(msg, severity="success" if ok else "error")  # type: ignore[attr-defined]
+        self.app.notify(msg, severity="success" if ok else "error")
         self._populate()
 
     def action_start_all(self) -> None:
-        jump, jump_password = self.app._jump_for(self._host)  # type: ignore[attr-defined]
+        jump, jump_password = self.app._jump_for(self._host)
         started = 0
         for t in self._host.tunnels:
-            ok, _ = self.app.tunnels.start(  # type: ignore[attr-defined]
+            ok, _ = self.app.tunnels.start(
                 self._host,
                 t,
-                self.app._password_for(self._host),  # type: ignore[attr-defined]
-                password_resolver=self.app._password_for,  # type: ignore[attr-defined]
+                self.app._password_for(self._host),
+                password_resolver=self.app._password_for,
                 jump_host=jump,
             )
             if ok:
                 started += 1
-        self.app.notify(f"Avviati {started}/{len(self._host.tunnels)} tunnel")  # type: ignore[attr-defined]
+        self.app.notify(f"Avviati {started}/{len(self._host.tunnels)} tunnel")
         self._populate()
 
     def action_stop(self) -> None:
         t = self._selected_tunnel()
         if not t:
             return
-        if self.app.tunnels.stop(self._host.alias, t.local_port):  # type: ignore[attr-defined]
-            self.app.notify(f"Tunnel {t.local_port} fermato")  # type: ignore[attr-defined]
+        if self.app.tunnels.stop(self._host.alias, t.local_port):
+            self.app.notify(f"Tunnel {t.local_port} fermato")
         else:
-            self.app.notify("Tunnel non attivo")  # type: ignore[attr-defined]
+            self.app.notify("Tunnel non attivo")
         self._populate()
 
     def action_stop_all(self) -> None:
-        n = self.app.tunnels.stop_all(self._host.alias)  # type: ignore[attr-defined]
-        self.app.notify(f"Fermati {n} tunnel")  # type: ignore[attr-defined]
+        n = self.app.tunnels.stop_all(self._host.alias)
+        self.app.notify(f"Fermati {n} tunnel")
         self._populate()
 
     def action_delete(self) -> None:
@@ -1173,13 +1180,13 @@ class TunnelScreen(Screen):
             return
 
         def do_delete() -> None:
-            self.app.tunnels.stop(self._host.alias, t.local_port)  # type: ignore[attr-defined]
+            self.app.tunnels.stop(self._host.alias, t.local_port)
             if t in self._host.tunnels:
                 self._host.tunnels.remove(t)
-            self.app._persist_and_reload()  # type: ignore[attr-defined]
+            self.app._persist_and_reload()
             self._populate()
 
-        self.app.push_screen(  # type: ignore[attr-defined]
+        self.app.push_screen(
             ConfirmScreen(
                 f"Rimuovere il tunnel '{t.name or t.local_port}'?",
                 self._describe(t),
@@ -1188,10 +1195,10 @@ class TunnelScreen(Screen):
         )
 
     def action_back(self) -> None:
-        self.app.pop_screen()  # type: ignore[attr-defined]
+        self.app.pop_screen()
 
 
-class TunnelFormScreen(Screen):
+class TunnelFormScreen(BravoricScreen):
     """Form per aggiungere un tunnel: kind, porta locale, destinazione."""
 
     BINDINGS = [
@@ -1237,18 +1244,18 @@ class TunnelFormScreen(Screen):
         try:
             tunnel = _parse_tunnel(raw)
         except ConfigError as exc:
-            self.app.notify(str(exc), severity="error")  # type: ignore[attr-defined]
+            self.app.notify(str(exc), severity="error")
             return
         self._host.tunnels.append(tunnel)
-        self.app._persist_and_reload()  # type: ignore[attr-defined]
-        self.app.pop_screen()  # type: ignore[attr-defined]
-        self.app.notify(f"Tunnel aggiunto: {tunnel.local_addr()}")  # type: ignore[attr-defined]
+        self.app._persist_and_reload()
+        self.app.pop_screen()
+        self.app.notify(f"Tunnel aggiunto: {tunnel.local_addr()}")
 
     def action_cancel(self) -> None:
-        self.app.pop_screen()  # type: ignore[attr-defined]
+        self.app.pop_screen()
 
 
-class WindowsScreen(Screen):
+class WindowsScreen(BravoricScreen):
     """Elenca le finestre di una sessione: rinomina (r), chiude (k)."""
 
     BINDINGS = [
@@ -1288,7 +1295,7 @@ class WindowsScreen(Screen):
         try:
             res = await _io(
                 ssh_adapter.tmux_list_windows, self._host, self._session, self.app.ssh_cfg
-            )  # type: ignore[attr-defined]
+            )
         except Exception as exc:
             self._loading = False
             self._update_status(f"Errore: {exc}", error=True)
@@ -1329,11 +1336,11 @@ class WindowsScreen(Screen):
     def action_rename_window(self) -> None:
         win = self._selected_window()
         if not win:
-            self.app.notify("Nessuna finestra selezionata")  # type: ignore[attr-defined]
+            self.app.notify("Nessuna finestra selezionata")
             return
         # estrae l'ID (prima cifra prima di ':' o spazio)
         win_id = win.split(":")[0].strip() if ":" in win else win.split()[0]
-        self.app.push_screen(  # type: ignore[attr-defined]
+        self.app.push_screen(
             InputScreen("Rinomina finestra", "nuovo nome", self._rename_win(win_id))
         )
 
@@ -1353,12 +1360,12 @@ class WindowsScreen(Screen):
                 win_id,
                 new_name,
                 self.app.ssh_cfg,
-            )  # type: ignore[attr-defined]
+            )
         except Exception as exc:
             self._update_status(f"Errore: {exc}", error=True)
             return
         if res.ok:
-            self.app.notify("Finestra rinominata")  # type: ignore[attr-defined]
+            self.app.notify("Finestra rinominata")
             self.refresh_windows()
         else:
             self._update_status(f"Errore: {res.stderr.strip() or 'fallita'}", error=True)
@@ -1366,10 +1373,10 @@ class WindowsScreen(Screen):
     def action_kill_window(self) -> None:
         win = self._selected_window()
         if not win:
-            self.app.notify("Nessuna finestra selezionata")  # type: ignore[attr-defined]
+            self.app.notify("Nessuna finestra selezionata")
             return
         win_id = win.split(":")[0].strip() if ":" in win else win.split()[0]
-        self.app.push_screen(  # type: ignore[attr-defined]
+        self.app.push_screen(
             ConfirmScreen(
                 f"Chiudere la finestra '{win}'?",
                 "Il processo nella finestra verrà terminato.",
@@ -1388,21 +1395,21 @@ class WindowsScreen(Screen):
         try:
             res = await _io(
                 ssh_adapter.tmux_kill_window, self._host, self._session, win_id, self.app.ssh_cfg
-            )  # type: ignore[attr-defined]
+            )
         except Exception as exc:
             self._update_status(f"Errore: {exc}", error=True)
             return
         if res.ok:
-            self.app.notify("Finestra chiusa")  # type: ignore[attr-defined]
+            self.app.notify("Finestra chiusa")
             self.refresh_windows()
         else:
             self._update_status(f"Errore: {res.stderr.strip() or 'fallita'}", error=True)
 
     def action_back(self) -> None:
-        self.app.pop_screen()  # type: ignore[attr-defined]
+        self.app.pop_screen()
 
 
-class RotationCatalogScreen(Screen):
+class RotationCatalogScreen(BravoricScreen):
     """Elenco dei profili di rotazione salvati: avvia o riapri tutto."""
 
     BINDINGS = [
@@ -1454,18 +1461,18 @@ class RotationCatalogScreen(Screen):
         if not self._rotations:
             return
         r = self._rotations[event.list_view.index]
-        self.app.push_screen(  # type: ignore[attr-defined]
+        self.app.push_screen(
             ObserveScreen(self._config, views=r.unique_entries(), interval=120, name=r.name)
         )
 
     def action_new(self) -> None:
-        self.app.push_screen(RotationCreateScreen(self._config))  # type: ignore[attr-defined]
+        self.app.push_screen(RotationCreateScreen(self._config))
 
     def action_delete(self) -> None:
         if not self._rotations:
             return
         r = self._rotations[self.query_one("#rotation-list", ListView).index]
-        self.app.push_screen(  # type: ignore[attr-defined]
+        self.app.push_screen(
             ConfirmScreen(
                 f"Eliminare la rotazione '{r.name}'?",
                 "Le sessioni tmux non vengono toccate.",
@@ -1478,7 +1485,7 @@ class RotationCatalogScreen(Screen):
 
         remove_rotation(self._config, name)
         self.reload()
-        self.app.notify(f"Rotazione '{name}' eliminata")  # type: ignore[attr-defined]
+        self.app.notify(f"Rotazione '{name}' eliminata")
 
     def action_reopen_all(self) -> None:
         """Riapre tutte le sessioni di TUTTE le rotazioni salvate (senza doppioni),
@@ -1491,7 +1498,7 @@ class RotationCatalogScreen(Screen):
                 if self._config.host(h):
                     unique.setdefault(f"{h}/{s}", (h, s))
         if not unique:
-            self.app.notify("Nessuna sessione da riaprire")  # type: ignore[attr-defined]
+            self.app.notify("Nessuna sessione da riaprire")
             return
         ptyxis = shutil.which("ptyxis") or shutil.which("gnome-terminal")
         wrap = str(Path.home() / ".local" / "bin" / "bravoric-ssh")
@@ -1511,16 +1518,16 @@ class RotationCatalogScreen(Screen):
                     if launched < len(unique):
                         time.sleep(0.5)
                 except OSError as exc:
-                    self.app.notify(f"Errore apertura {host_alias}: {exc}", severity="error")  # type: ignore[attr-defined]
+                    self.app.notify(f"Errore apertura {host_alias}: {exc}", severity="error")
             else:
                 break
-        self.app.notify(f"Aperte {launched} finestre ({len(unique)} sessioni uniche)")  # type: ignore[attr-defined]
+        self.app.notify(f"Aperte {launched} finestre ({len(unique)} sessioni uniche)")
 
     def action_back(self) -> None:
-        self.app.pop_screen()  # type: ignore[attr-defined]
+        self.app.pop_screen()
 
 
-class RotationCreateScreen(Screen):
+class RotationCreateScreen(BravoricScreen):
     """Launcher per creare una rotazione: spunta server, poi sessioni."""
 
     BINDINGS = [
@@ -1575,7 +1582,7 @@ class RotationCreateScreen(Screen):
     async def _load_sessions(self, host: Host) -> list[str]:
         if host.alias in self._sessions_cache:
             return self._sessions_cache[host.alias]
-        res = await _io(ssh_adapter.list_tmux_sessions, host, self.app.ssh_cfg)  # type: ignore[attr-defined]
+        res = await _io(ssh_adapter.list_tmux_sessions, host, self.app.ssh_cfg)
         sessions = res.sessions if res.ok else []
         self._sessions_cache[host.alias] = sessions
         return sessions
@@ -1589,14 +1596,14 @@ class RotationCreateScreen(Screen):
         else:
             sessions = await self._load_sessions(host)
             if not sessions:
-                self.app.notify(f"Nessuna sessione su '{host.alias}'", severity="warning")  # type: ignore[attr-defined]
+                self.app.notify(f"Nessuna sessione su '{host.alias}'", severity="warning")
             self._selected[host.alias] = list(sessions)
         self._populate_hosts()
         # riapri la schermata sessioni del server per la selezione fine
         if host.alias in self._selected:
             self.app.push_screen(
                 SessionPickScreen(self._config, host, self._selected[host.alias], self)
-            )  # type: ignore[attr-defined]
+            )
 
     def action_start(self) -> None:
         views: list[tuple[str, str]] = []
@@ -1604,17 +1611,17 @@ class RotationCreateScreen(Screen):
             for s in sessions:
                 views.append((h, s))
         if not views:
-            self.app.notify("Seleziona almeno una sessione", severity="error")  # type: ignore[attr-defined]
+            self.app.notify("Seleziona almeno una sessione", severity="error")
             return
-        self.app.push_screen(ObserveScreen(self._config, views=views, interval=120))  # type: ignore[attr-defined]
+        self.app.push_screen(ObserveScreen(self._config, views=views, interval=120))
 
     def action_save(self) -> None:
         views = [(h, s) for h, sessions in self._selected.items() for s in sessions]
         if not views:
-            self.app.notify("Seleziona almeno una sessione", severity="error")  # type: ignore[attr-defined]
+            self.app.notify("Seleziona almeno una sessione", severity="error")
             return
 
-        self.app.push_screen(  # type: ignore[attr-defined]
+        self.app.push_screen(
             InputScreen(
                 "Nome rotazione", "es. tutti-i-server", lambda name: self._save_named(name, views)
             )
@@ -1624,13 +1631,13 @@ class RotationCreateScreen(Screen):
         from .rotation import Rotation, add_rotation
 
         add_rotation(self._config, Rotation(name=name, entries=views))
-        self.app.notify(f"Rotazione '{name}' salvata ({len(views)} sessioni)")  # type: ignore[attr-defined]
+        self.app.notify(f"Rotazione '{name}' salvata ({len(views)} sessioni)")
 
     def action_back(self) -> None:
-        self.app.pop_screen()  # type: ignore[attr-defined]
+        self.app.pop_screen()
 
 
-class SessionPickScreen(Screen):
+class SessionPickScreen(BravoricScreen):
     """Selezione fine delle sessioni di un host (checkbox per sessione)."""
 
     BINDINGS = [
@@ -1686,10 +1693,10 @@ class SessionPickScreen(Screen):
         self._creator._populate_hosts()
 
     def action_back(self) -> None:
-        self.app.pop_screen()  # type: ignore[attr-defined]
+        self.app.pop_screen()
 
 
-class ObserveScreen(Screen):
+class ObserveScreen(BravoricScreen):
     """Osservazione automatica delle sessioni tmux (mono-host o multi-host).
 
     Mostra il contenuto della sessione corrente (capture-pane) e, se non riceve
@@ -1815,9 +1822,9 @@ class ObserveScreen(Screen):
     async def _load_views_worker(self) -> None:
         if not self._views and self._host:
             # modalità mono-host: elenca le sessioni dell'host
-            res = await _io(ssh_adapter.list_tmux_sessions, self._host, self.app.ssh_cfg)  # type: ignore[attr-defined]
+            res = await _io(ssh_adapter.list_tmux_sessions, self._host, self.app.ssh_cfg)
             if not res.ok:
-                self.app.notify(f"Impossibile elencare sessioni: {res.error}", severity="error")  # type: ignore[attr-defined]
+                self.app.notify(f"Impossibile elencare sessioni: {res.error}", severity="error")
                 return
             self._views = [(self._host.alias, s) for s in res.sessions]
         if not self._views:
@@ -1936,7 +1943,7 @@ class ObserveScreen(Screen):
         if not self._views:
             return
         suggestions = [f"{h}/{s}" for h, s in self._views]
-        self.app.push_screen(  # type: ignore[attr-defined]
+        self.app.push_screen(
             InputScreen(
                 "Vai a sessione",
                 "host/sessione",
@@ -1963,14 +1970,14 @@ class ObserveScreen(Screen):
         host_alias, session = self._views[self._current]
         host = self._view_host(host_alias)
         if host:
-            self.app.request_launch(  # type: ignore[attr-defined]
+            self.app.request_launch(
                 LaunchAction(kind="attach", host=host, session=session, rotation=self._name)
             )
 
     def action_interactive(self) -> None:
         """Toggle della modalità interattiva: scrivi nell'input e premi Invio."""
         if not self._views:
-            self.app.notify("Nessuna sessione da cui interagire", severity="warning")  # type: ignore[attr-defined]
+            self.app.notify("Nessuna sessione da cui interagire", severity="warning")
             return
         self._interactive = not self._interactive
         inp = self.query_one("#observe-input", Input)
@@ -1981,7 +1988,7 @@ class ObserveScreen(Screen):
             inp.focus()
             self.app.notify(
                 "Interattiva: scrivi e premi Invio (Ctrl+S per inviare senza Enter)", timeout=4
-            )  # type: ignore[attr-defined]
+            )
         else:
             inp.value = ""
         self._update_info()
@@ -1997,9 +2004,9 @@ class ObserveScreen(Screen):
             return
         self._capture_token += 1
         if text:
-            await _io(ssh_adapter.tmux_send_keys, host, session, text, self.app.ssh_cfg)  # type: ignore[attr-defined]
+            await _io(ssh_adapter.tmux_send_keys, host, session, text, self.app.ssh_cfg)
         if enter:
-            await _io(ssh_adapter.tmux_send_enter, host, session, self.app.ssh_cfg)  # type: ignore[attr-defined]
+            await _io(ssh_adapter.tmux_send_enter, host, session, self.app.ssh_cfg)
         await self._capture()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -2035,10 +2042,10 @@ class ObserveScreen(Screen):
                 _set_terminal_title("bravoric-ssh-client")
             except Exception:
                 pass
-        self.app.pop_screen()  # type: ignore[attr-defined]
+        self.app.pop_screen()
 
 
-class InputScreen(Screen):
+class InputScreen(BravoricScreen):
     """Raccoglie un input testuale (con eventuali suggerimenti) e chiama una callback."""
 
     BINDINGS = [
@@ -2089,7 +2096,7 @@ class InputScreen(Screen):
         if not value and self._suggestions:
             value = self._suggestions[0]
         if not value:
-            self.app.notify("Valore vuoto", severity="error")  # type: ignore[attr-defined]
+            self.app.notify("Valore vuoto", severity="error")
             return
         import asyncio
         import inspect
@@ -2097,7 +2104,7 @@ class InputScreen(Screen):
         result = self._on_submit(value)
         if inspect.isawaitable(result):
             asyncio.create_task(result)
-        self.app.pop_screen()  # type: ignore[attr-defined]
+        self.app.pop_screen()
 
     def action_suggest_prev(self) -> None:
         if not self._suggestions:
@@ -2122,10 +2129,10 @@ class InputScreen(Screen):
             pass
 
     def action_cancel(self) -> None:
-        self.app.pop_screen()  # type: ignore[attr-defined]
+        self.app.pop_screen()
 
 
-class InfoScreen(Screen):
+class InfoScreen(BravoricScreen):
     """Mostra un testo (dettagli sessione, elenco finestre...)."""
 
     BINDINGS = [
@@ -2147,10 +2154,10 @@ class InfoScreen(Screen):
         yield Footer()
 
     def action_close(self) -> None:
-        self.app.pop_screen()  # type: ignore[attr-defined]
+        self.app.pop_screen()
 
 
-class SnippetCatalogScreen(Screen):
+class SnippetCatalogScreen(BravoricScreen):
     """Catalogo snippet: scegli uno da eseguire in broadcast su più host."""
 
     BINDINGS = [
@@ -2194,10 +2201,10 @@ class SnippetCatalogScreen(Screen):
         if not self._snippets:
             return
         s = self._snippets[event.list_view.index]
-        self.app.push_screen(BroadcastHostPickerScreen(self._config, s))  # type: ignore[attr-defined]
+        self.app.push_screen(BroadcastHostPickerScreen(self._config, s))
 
     def action_new(self) -> None:
-        self.app.push_screen(SnippetFormScreen(self._config))  # type: ignore[attr-defined]
+        self.app.push_screen(SnippetFormScreen(self._config))
 
     def action_delete(self) -> None:
         if not self._snippets:
@@ -2209,17 +2216,17 @@ class SnippetCatalogScreen(Screen):
 
             remove_snippet(self._config, s.name)
             self.reload()
-            self.app.notify(f"Snippet '{s.name}' eliminato")  # type: ignore[attr-defined]
+            self.app.notify(f"Snippet '{s.name}' eliminato")
 
-        self.app.push_screen(  # type: ignore[attr-defined]
+        self.app.push_screen(
             ConfirmScreen(f"Eliminare lo snippet '{s.name}'?", s.command, do_delete)
         )
 
     def action_back(self) -> None:
-        self.app.pop_screen()  # type: ignore[attr-defined]
+        self.app.pop_screen()
 
 
-class SnippetFormScreen(Screen):
+class SnippetFormScreen(BravoricScreen):
     """Form per aggiungere uno snippet: nome, descrizione, comando."""
 
     BINDINGS = [
@@ -2250,7 +2257,7 @@ class SnippetFormScreen(Screen):
         name = self.query_one("#s-name", Input).value.strip()
         cmd = self.query_one("#s-cmd", Input).value.strip()
         if not name or not cmd:
-            self.app.notify("Nome e comando obbligatori", severity="error")  # type: ignore[attr-defined]
+            self.app.notify("Nome e comando obbligatori", severity="error")
             return
         add_snippet(
             self._config,
@@ -2260,16 +2267,16 @@ class SnippetFormScreen(Screen):
                 description=self.query_one("#s-desc", Input).value.strip(),
             ),
         )
-        self.app.pop_screen()  # type: ignore[attr-defined]
-        self.app.notify(f"Snippet '{name}' salvato")  # type: ignore[attr-defined]
+        self.app.pop_screen()
+        self.app.notify(f"Snippet '{name}' salvato")
         if isinstance(self.app.screen, SnippetCatalogScreen):
-            self.app.screen.reload()  # type: ignore[attr-defined]
+            self.app.screen.reload()
 
     def action_cancel(self) -> None:
-        self.app.pop_screen()  # type: ignore[attr-defined]
+        self.app.pop_screen()
 
 
-class BroadcastHostPickerScreen(Screen):
+class BroadcastHostPickerScreen(BravoricScreen):
     """Seleziona gli host (Space per marcare) ed esegui lo snippet in parallelo."""
 
     BINDINGS = [
@@ -2351,9 +2358,9 @@ class BroadcastHostPickerScreen(Screen):
     async def action_run(self) -> None:
         hosts = [h for h in self._config.hosts if h.alias in self._selected]
         if not hosts:
-            self.app.notify("Nessun host marcato", severity="error")  # type: ignore[attr-defined]
+            self.app.notify("Nessun host marcato", severity="error")
             return
-        self.app.push_screen(  # type: ignore[attr-defined]
+        self.app.push_screen(
             BroadcastResultScreen(
                 self._config,
                 hosts,
@@ -2364,10 +2371,10 @@ class BroadcastHostPickerScreen(Screen):
         )
 
     def action_back(self) -> None:
-        self.app.pop_screen()  # type: ignore[attr-defined]
+        self.app.pop_screen()
 
 
-class BroadcastResultScreen(Screen):
+class BroadcastResultScreen(BravoricScreen):
     """Griglia dei risultati del broadcast: un riquadro per host.
 
     In modalità tmux mostra la sessione creata per host (da attachare per
@@ -2417,22 +2424,22 @@ class BroadcastResultScreen(Screen):
                     self._hosts,
                     self._command,
                     self._snippet_name,
-                    self.app.ssh_cfg,  # type: ignore[attr-defined]
+                    self.app.ssh_cfg,
                 )
             else:
                 self._results = await _io(
                     run_snippet_on_hosts,
                     self._hosts,
                     self._command,
-                    self.app.ssh_cfg,  # type: ignore[attr-defined]
+                    self.app.ssh_cfg,
                 )
         except Exception as exc:
-            self.query_one("#bcast-status", Label).update(f"Errore broadcast: {exc}")  # type: ignore[attr-defined]
+            self.query_one("#bcast-status", Label).update(f"Errore broadcast: {exc}")
             self._busy = False
             return
         self._busy = False
         mode_txt = "in sessione tmux" if self._mode == "tmux" else "diretta"
-        self.query_one("#bcast-status", Label).update(  # type: ignore[attr-defined]
+        self.query_one("#bcast-status", Label).update(
             f"Broadcast '{self._snippet_name}' ({mode_txt}) — {len(self._results)} host"
         )
         grid = self.query_one("#broadcast-grid", Grid)
@@ -2461,10 +2468,10 @@ class BroadcastResultScreen(Screen):
             grid.mount(Static(body, classes=cls))
 
     def action_back(self) -> None:
-        self.app.pop_screen()  # type: ignore[attr-defined]
+        self.app.pop_screen()
 
 
-class SessionScreen(Screen):
+class SessionScreen(BravoricScreen):
     """Sessioni tmux di un host: attach, crea, rename, kill, dettagli."""
 
     BINDINGS = [
@@ -2518,7 +2525,7 @@ class SessionScreen(Screen):
 
     async def _load_sessions(self) -> None:
         try:
-            res = await _io(ssh_adapter.list_tmux_sessions, self._host, self.app.ssh_cfg)  # type: ignore[attr-defined]
+            res = await _io(ssh_adapter.list_tmux_sessions, self._host, self.app.ssh_cfg)
             self._loading = False
             if res.ok:
                 self._sessions = res.sessions
@@ -2576,10 +2583,10 @@ class SessionScreen(Screen):
             self.action_new_session()
 
     def _do_attach(self, name: str) -> None:
-        self.app.request_launch(LaunchAction(kind="attach", host=self._host, session=name))  # type: ignore[attr-defined]
+        self.app.request_launch(LaunchAction(kind="attach", host=self._host, session=name))
 
     def action_back(self) -> None:
-        self.app.pop_screen()  # type: ignore[attr-defined]
+        self.app.pop_screen()
 
     def action_new_session(self) -> None:
         from .history import load_history
@@ -2589,7 +2596,7 @@ class SessionScreen(Screen):
         for e in load_history(self._config):
             if e.host == self._host.alias and e.session not in suggestions:
                 suggestions.append(e.session)
-        self.app.push_screen(  # type: ignore[attr-defined]
+        self.app.push_screen(
             InputScreen(
                 "Nuova sessione",
                 "nome sessione (frecce per i suggerimenti)",
@@ -2600,24 +2607,24 @@ class SessionScreen(Screen):
         )
 
     def _new_named(self, name: str) -> None:
-        self.app.request_launch(LaunchAction(kind="new", host=self._host, name=name))  # type: ignore[attr-defined]
+        self.app.request_launch(LaunchAction(kind="new", host=self._host, name=name))
 
     def action_shell(self) -> None:
-        self.app.request_launch(LaunchAction(kind="shell", host=self._host))  # type: ignore[attr-defined]
+        self.app.request_launch(LaunchAction(kind="shell", host=self._host))
 
     def action_attach_ro(self) -> None:
         name = self._selected_session()
         if name:
-            self.app.request_launch(LaunchAction(kind="attach_ro", host=self._host, session=name))  # type: ignore[attr-defined]
+            self.app.request_launch(LaunchAction(kind="attach_ro", host=self._host, session=name))
         else:
-            self.app.notify("Nessuna sessione selezionata")  # type: ignore[attr-defined]
+            self.app.notify("Nessuna sessione selezionata")
 
     def action_rename_session(self) -> None:
         old = self._selected_session()
         if not old:
-            self.app.notify("Nessuna sessione selezionata")  # type: ignore[attr-defined]
+            self.app.notify("Nessuna sessione selezionata")
             return
-        self.app.push_screen(  # type: ignore[attr-defined]
+        self.app.push_screen(
             InputScreen("Rinomina sessione", "nuovo nome", self._rename, initial=old)
         )
 
@@ -2629,12 +2636,12 @@ class SessionScreen(Screen):
         try:
             res = await _io(
                 ssh_adapter.tmux_rename_session, self._host, old, new_name, self.app.ssh_cfg
-            )  # type: ignore[attr-defined]
+            )
         except Exception as exc:
             self._update_status(f"Errore: {exc}", error=True)
             return
         if res.ok:
-            self.app.notify(f"Sessione rinominata in '{new_name}'")  # type: ignore[attr-defined]
+            self.app.notify(f"Sessione rinominata in '{new_name}'")
             self.refresh_sessions()
         else:
             self._update_status(
@@ -2644,9 +2651,9 @@ class SessionScreen(Screen):
     def action_kill_session(self) -> None:
         name = self._selected_session()
         if not name:
-            self.app.notify("Nessuna sessione selezionata")  # type: ignore[attr-defined]
+            self.app.notify("Nessuna sessione selezionata")
             return
-        self.app.push_screen(  # type: ignore[attr-defined]
+        self.app.push_screen(
             ConfirmScreen(
                 f"Terminare la sessione '{name}'?",
                 "Le finestre della sessione verranno chiuse.",
@@ -2660,12 +2667,12 @@ class SessionScreen(Screen):
     async def _kill_async(self, name: str) -> None:
         self._update_status(f"Termino '{name}'…")
         try:
-            res = await _io(ssh_adapter.tmux_kill_session, self._host, name, self.app.ssh_cfg)  # type: ignore[attr-defined]
+            res = await _io(ssh_adapter.tmux_kill_session, self._host, name, self.app.ssh_cfg)
         except Exception as exc:
             self._update_status(f"Errore: {exc}", error=True)
             return
         if res.ok:
-            self.app.notify(f"Sessione '{name}' terminata")  # type: ignore[attr-defined]
+            self.app.notify(f"Sessione '{name}' terminata")
             self.refresh_sessions()
         else:
             self._update_status(
@@ -2673,7 +2680,7 @@ class SessionScreen(Screen):
             )
 
     def action_kill_server(self) -> None:
-        self.app.push_screen(  # type: ignore[attr-defined]
+        self.app.push_screen(
             ConfirmScreen(
                 "Terminare TUTTE le sessioni del server?",
                 f"Tutte le sessioni tmux su {self._host.alias} verranno chiuse.",
@@ -2687,12 +2694,12 @@ class SessionScreen(Screen):
     async def _kill_server_async(self) -> None:
         self._update_status("Termino il server…")
         try:
-            res = await _io(ssh_adapter.tmux_kill_server, self._host, self.app.ssh_cfg)  # type: ignore[attr-defined]
+            res = await _io(ssh_adapter.tmux_kill_server, self._host, self.app.ssh_cfg)
         except Exception as exc:
             self._update_status(f"Errore: {exc}", error=True)
             return
         if res.ok:
-            self.app.notify("Server tmux terminato")  # type: ignore[attr-defined]
+            self.app.notify("Server tmux terminato")
             self.refresh_sessions()
         else:
             self._update_status(
@@ -2702,19 +2709,19 @@ class SessionScreen(Screen):
     def action_detach_clients(self) -> None:
         name = self._selected_session()
         if not name:
-            self.app.notify("Nessuna sessione selezionata")  # type: ignore[attr-defined]
+            self.app.notify("Nessuna sessione selezionata")
             return
         self.run_worker(self._detach_async(name), thread=False, exclusive=True)
 
     async def _detach_async(self, name: str) -> None:
         self._update_status(f"Stacco client da '{name}'…")
         try:
-            res = await _io(ssh_adapter.tmux_detach_clients, self._host, name, self.app.ssh_cfg)  # type: ignore[attr-defined]
+            res = await _io(ssh_adapter.tmux_detach_clients, self._host, name, self.app.ssh_cfg)
         except Exception as exc:
             self._update_status(f"Errore: {exc}", error=True)
             return
         if res.ok:
-            self.app.notify(f"Altri client staccati da '{name}'")  # type: ignore[attr-defined]
+            self.app.notify(f"Altri client staccati da '{name}'")
         else:
             self._update_status(
                 f"Errore: {res.stderr.strip() or res.stdout.strip() or 'fallita'}", error=True
@@ -2723,14 +2730,14 @@ class SessionScreen(Screen):
     def action_details(self) -> None:
         name = self._selected_session()
         if not name:
-            self.app.notify("Nessuna sessione selezionata")  # type: ignore[attr-defined]
+            self.app.notify("Nessuna sessione selezionata")
             return
         self.run_worker(self._details_async(name), thread=False, exclusive=True)
 
     async def _details_async(self, name: str) -> None:
         self._update_status(f"Dettagli di '{name}'…")
         try:
-            res = await _io(ssh_adapter.tmux_session_details, self._host, name, self.app.ssh_cfg)  # type: ignore[attr-defined]
+            res = await _io(ssh_adapter.tmux_session_details, self._host, name, self.app.ssh_cfg)
         except Exception as exc:
             self._update_status(f"Errore: {exc}", error=True)
             return
@@ -2739,7 +2746,7 @@ class SessionScreen(Screen):
                 InfoScreen(
                     f"Dettagli sessione '{name}'", res.stdout.strip() or "(nessun dettaglio)"
                 )
-            )  # type: ignore[attr-defined]
+            )
         else:
             self._update_status(
                 f"Errore: {res.stderr.strip() or res.stdout.strip() or 'fallita'}", error=True
@@ -2748,16 +2755,16 @@ class SessionScreen(Screen):
     def action_windows(self) -> None:
         name = self._selected_session()
         if not name:
-            self.app.notify("Nessuna sessione selezionata")  # type: ignore[attr-defined]
+            self.app.notify("Nessuna sessione selezionata")
             return
-        self.app.push_screen(WindowsScreen(self._host, name))  # type: ignore[attr-defined]
+        self.app.push_screen(WindowsScreen(self._host, name))
 
     def action_new_window(self) -> None:
         name = self._selected_session()
         if not name:
-            self.app.notify("Nessuna sessione selezionata")  # type: ignore[attr-defined]
+            self.app.notify("Nessuna sessione selezionata")
             return
-        self.app.push_screen(  # type: ignore[attr-defined]
+        self.app.push_screen(
             InputScreen(
                 "Nuova finestra", "nome finestra (opzionale)", self._new_window_in, initial=""
             )
@@ -2778,12 +2785,12 @@ class SessionScreen(Screen):
                 session,
                 window_name or None,
                 self.app.ssh_cfg,
-            )  # type: ignore[attr-defined]
+            )
         except Exception as exc:
             self._update_status(f"Errore: {exc}", error=True)
             return
         if res.ok:
-            self.app.notify("Finestra creata")  # type: ignore[attr-defined]
+            self.app.notify("Finestra creata")
             self.refresh_sessions()
         else:
             self._update_status(f"Errore: {res.stderr.strip() or 'fallita'}", error=True)
@@ -2792,7 +2799,7 @@ class SessionScreen(Screen):
         self.refresh_sessions()
 
     def action_quit(self) -> None:
-        self.app.exit()  # type: ignore[attr-defined]
+        self.app.exit()
 
 
 def _sftp_cli(config, host_a_ref: str, host_b_ref: str) -> None:
