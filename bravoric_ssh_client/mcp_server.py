@@ -551,12 +551,18 @@ class BravoricMcp:
         return self._dump(res.sessions)
 
     def create_session(
-        self, alias: str, name: str | None = None, command: str | None = None
+        self,
+        alias: str,
+        name: str | None = None,
+        command: str | None = None,
+        cwd: str | None = None,
     ) -> str:
         host = self._host(alias)
         name = name or session_slug("mcp", alias)
         q = adapter._sh_quote
         tmux_cmd = f"tmux new -d -s {q(name)}"
+        if cwd:
+            tmux_cmd += f" -c {q(cwd)}"
         if command:
             tmux_cmd += f" {q(command)}"
         res = adapter.run_tmux_action(host, tmux_cmd, self._ssh_cfg())

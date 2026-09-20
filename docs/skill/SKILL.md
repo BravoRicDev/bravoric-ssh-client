@@ -72,7 +72,7 @@ Per non saturare la finestra di contesto con dump giganteschi, usa i **4 tool di
 - `send_line(alias, session, text="", capture_lines=0)`: **Alias rapido** di `send_input` con `enter=True` garantito.
 - `list_sessions(alias)`: elenca le sessioni su un host.
 - `list_sessions_all`: elenca tutte le sessioni di tutti gli host con un'unica chiamata.
-- `create_session(alias, session, command)`: crea sessione detached con auto-massimizzazione.
+- `create_session(alias, session, command=None, cwd=None)`: crea sessione detached con directory di lavoro iniziale (`cwd`) e auto-massimizzazione.
 - `capture_pane(alias, session, lines=30)`: legge il buffer del terminale (ultime N righe).
 - `pane_diff(alias, session, max_lines=200, reset=False)`: **diff incrementale** dell'output della pane (restituisce SOLO le righe comparse dall'ultima lettura, azzerando lo spreco di token nei controlli periodici).
 - `pane_info(alias, session)`: restituisce processo attivo, CWD, PID, titolo e geometria della pane.

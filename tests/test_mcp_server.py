@@ -131,6 +131,16 @@ def test_create_and_kill_session(monkeypatch, tmp_path):
     out = _run(_call(mcp, "create_session", {"alias": "alpha", "name": "sess"}))
     assert "sess" in out
     assert any("tmux new -d -s 'sess'" in c for c in calls)
+    calls.clear()
+    out = _run(
+        _call(
+            mcp,
+            "create_session",
+            {"alias": "alpha", "name": "sess_pi", "command": "pi", "cwd": "/progetti/test"},
+        )
+    )
+    assert "sess_pi" in out
+    assert any("tmux new -d -s 'sess_pi' -c '/progetti/test' 'pi'" in c for c in calls)
     out = _run(_call(mcp, "kill_session", {"alias": "alpha", "name": "sess"}))
     assert "terminata" in out
 
@@ -571,7 +581,9 @@ def test_send_input_modes(monkeypatch, tmp_path):
             actual_m = "paste"
         else:
             actual_m = "keys"
-        return adapter.TmuxActionResult(ok=True, mode=actual_m, stdout="captured text" if kwargs.get("capture_lines") else "")
+        return adapter.TmuxActionResult(
+            ok=True, mode=actual_m, stdout="captured text" if kwargs.get("capture_lines") else ""
+        )
 
     monkeypatch.setattr(adapter, "tmux_send_input", fake_send_input)
     mcp = BravoricMcp(config=make_cfg(tmp_path))

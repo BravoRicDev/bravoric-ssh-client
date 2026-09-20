@@ -463,12 +463,7 @@ def tmux_send_input(
 
     use_paste = mode_val == "paste" or (
         mode_val == "auto"
-        and (
-            "\n" in text
-            or "\t" in text
-            or len(text) > 100
-            or any(ord(c) < 32 for c in text)
-        )
+        and ("\n" in text or "\t" in text or len(text) > 100 or any(ord(c) < 32 for c in text))
     )
 
     capture_part = (
@@ -482,7 +477,9 @@ def tmux_send_input(
         b64 = base64.b64encode(text.encode("utf-8")).decode("ascii")
         flag = "-p " if bracketed else ""
         delay_part = f" && sleep {settle_delay:.2f}" if settle_delay > 0 and enter else ""
-        enter_part = f"{delay_part} && tmux send-keys -t {_sh_quote(session)} Enter" if enter else ""
+        enter_part = (
+            f"{delay_part} && tmux send-keys -t {_sh_quote(session)} Enter" if enter else ""
+        )
         cmd = (
             f"printf %s {_sh_quote(b64)} | base64 -d | tmux load-buffer -b {_sh_quote(name)} - && "
             f"{{ tmux paste-buffer {flag}-b {_sh_quote(name)} -t {_sh_quote(session)}"
