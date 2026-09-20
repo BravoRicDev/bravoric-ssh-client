@@ -590,3 +590,498 @@ print(json.dumps({
 }))
 """
     return _run_py(host, ssh_cfg, script, timeout=timeout)
+
+
+# ---------------------------------------------------------------------------
+# 5. Advanced Automation & Efficiency Tools
+# ---------------------------------------------------------------------------
+
+
+def remote_tmux_run_and_wait_prompt(
+    host: Host,
+    ssh_cfg: SshConfig | None,
+    session: str,
+    command: str,
+    prompt_regex: str,
+    timeout: int = 30,
+) -> dict[str, Any]:
+    import base64
+
+    b64_cmd = base64.b64encode(command.encode("utf-8")).decode("ascii")
+    script = f"""
+import subprocess, time, json, re, base64
+
+session = {json.dumps(session)}
+prompt_regex = {json.dumps(prompt_regex)}
+cmd = base64.b64decode({json.dumps(b64_cmd)}).decode('utf-8')
+
+try:
+    re.compile(prompt_regex)
+except re.error as e:
+    print(json.dumps({{"ok": False, "error": "Invalid regex: " + str(e)}}))
+    exit(0)
+
+try:
+    subprocess.run(['tmux', 'send-keys', '-t', session, cmd, 'C-m'], check=True, capture_output=True, text=True)
+except subprocess.CalledProcessError as e:
+    print(json.dumps({{"ok": False, "error": "Tmux error: " + e.stderr.strip()}}))
+    exit(0)
+
+start = time.time()
+out = ""
+found = False
+while time.time() - start < {timeout}:
+    p = subprocess.run(['tmux', 'capture-pane', '-t', session, '-p'], capture_output=True, text=True)
+    if p.returncode == 0:
+        out = p.stdout
+        if re.search(prompt_regex, out):
+            found = True
+            break
+    time.sleep(0.5)
+
+print(json.dumps({{"ok": True, "found_prompt": found, "output": out[-50000:]}}))
+"""
+    return _run_py(host, ssh_cfg, script, timeout=timeout + 5)
+
+
+def remote_replace_block(
+    host: Host,
+    ssh_cfg: SshConfig | None,
+    path: str,
+    old_text: str,
+    new_text: str,
+    timeout: int = 30,
+) -> dict[str, Any]:
+    import base64
+
+    b64_old = base64.b64encode(old_text.encode("utf-8")).decode("ascii")
+    b64_new = base64.b64encode(new_text.encode("utf-8")).decode("ascii")
+    script = f"""
+import base64, json, os
+
+path = {json.dumps(path)}
+old_t = base64.b64decode({json.dumps(b64_old)})
+new_t = base64.b64decode({json.dumps(b64_new)})
+
+try:
+    with open(path, 'rb') as f:
+        content = f.read()
+
+    if old_t not in content:
+        print(json.dumps({{"ok": False, "error": "old_text non trovato nel file"}}))
+    elif content.count(old_t) > 1:
+        print(json.dumps({{"ok": False, "error": "old_text trovato più volte, sii più specifico"}}))
+    else:
+        content = content.replace(old_t, new_t, 1)
+        with open(path, 'wb') as f:
+            f.write(content)
+        print(json.dumps({{"ok": True, "path": path, "bytes": len(content)}}))
+except Exception as e:
+    print(json.dumps({{"ok": False, "error": str(e)}}))
+"""
+    return _run_py(host, ssh_cfg, script, timeout=timeout)
+
+
+def remote_project_tree(
+    host: Host, ssh_cfg: SshConfig | None, path: str, max_depth: int = 3, timeout: int = 30
+) -> dict[str, Any]:
+    script = f"""
+import os, json
+
+base_path = os.path.abspath(os.path.expanduser({json.dumps(path)}))
+try:
+max_depth = int(max_depth)
+except (ValueError, TypeError):
+max_depth = 3
+ignore_dirs = set(['node_modules', '.git', 'venv', '.venv', '__pycache__', 'dist', 'build', '.idea', '.vscode'])
+
+def build_tree(current_path, current_depth):
+    if current_depth > max_depth:
+        return "... (max depth reached)"
+    try:
+        entries = os.listdir(current_path)
+    except Exception:
+        return "(error)"
+
+    tree = {{}}
+    for e in sorted(entries):
+        full_p = os.path.join(current_path, e)
+        if os.path.islink(full_p):
+            tree[e] = "(symlink)"
+        elif os.path.isdir(full_p):
+            if e in ignore_dirs:
+                tree[e] = "(ignored)"
+            else:
+                tree[e] = build_tree(full_p, current_depth + 1)
+        else:
+            tree[e] = "file"
+    return tree
+
+if not os.path.exists(base_path):
+    print(json.dumps({{"ok": False, "error": "Path non trovato"}}))
+else:
+    tree = build_tree(base_path, 1)
+    print(json.dumps({{"ok": True, "path": base_path, "tree": tree}}))
+"""
+    return _run_py(host, ssh_cfg, script, timeout=timeout)
+
+
+def remote_manage_service(
+    host: Host,
+    ssh_cfg: SshConfig | None,
+    name: str,
+    action: str = "status",
+    manager: str = "systemd",
+    timeout: int = 30,
+) -> dict[str, Any]:
+    script = f"""
+import subprocess, json
+
+name = {json.dumps(name)}
+action = {json.dumps(action)}
+manager = {json.dumps(manager)}
+
+result = {{"ok": False, "manager": manager, "service": name, "action": action}}
+
+try:
+    import shutil
+    if manager == "systemd":
+        if not shutil.which('systemctl'):
+            raise Exception("systemctl not found")
+        if action == "status":
+            p = subprocess.run(['systemctl', 'status', name, '--no-pager'], capture_output=True, text=True)
+            active = subprocess.run(['systemctl', 'is-active', name], capture_output=True, text=True).stdout.strip()
+            result.update({{"ok": True, "active_state": active, "output": p.stdout}})
+        elif action in ["start", "stop", "restart", "reload", "enable", "disable"]:
+            p = subprocess.run(['sudo', '-n', 'systemctl', action, name], capture_output=True, text=True)
+            result.update({{"ok": p.returncode == 0, "output": p.stdout, "error": p.stderr}})
+    elif manager == "docker":
+        if not shutil.which('docker'):
+            raise Exception("docker not found")
+        if action == "status":
+            p = subprocess.run(['docker', 'inspect', name], capture_output=True, text=True)
+            if p.returncode == 0:
+                data = json.loads(p.stdout)
+                state = data[0].get('State', {{}}) if data else {{}}
+                result.update({{"ok": True, "state": state}})
+            else:
+                result.update({{"error": p.stderr}})
+        elif action in ["start", "stop", "restart"]:
+            p = subprocess.run(['docker', action, name], capture_output=True, text=True)
+            result.update({{"ok": p.returncode == 0, "output": p.stdout, "error": p.stderr}})
+    print(json.dumps(result))
+except Exception as e:
+    result["error"] = str(e)
+    print(json.dumps(result))
+"""
+    return _run_py(host, ssh_cfg, script, timeout=timeout)
+
+
+def remote_read_service_logs(
+    host: Host,
+    ssh_cfg: SshConfig | None,
+    name: str,
+    lines: int = 100,
+    level: str = "",
+    grep: str = "",
+    timeout: int = 30,
+) -> dict[str, Any]:
+    script = f"""
+import subprocess, json
+
+name = {json.dumps(name)}
+try:
+lines = int(lines)
+except (ValueError, TypeError):
+lines = 100
+level = {json.dumps(level)}
+grep = {json.dumps(grep)}
+
+cmd = ['journalctl', '-u', name, '-n', str(lines), '--no-pager']
+if level:
+    cmd.extend(['-p', level])
+
+if grep:
+    import re
+    try:
+        re.compile(grep)
+    except re.error as e:
+        print(json.dumps({{"ok": False, "error": "Invalid grep regex: " + str(e)}}))
+        exit(0)
+
+try:
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout={timeout-5})
+    out = p.stdout[-500000:] # prevent OOM in processing
+    if grep:
+        import re
+        out = "\\n".join([l for l in out.splitlines() if re.search(grep, l, re.IGNORECASE)])
+    print(json.dumps({{"ok": p.returncode == 0, "lines": len(out.splitlines()), "logs": out[-50000:]}}))
+except Exception as e:
+    print(json.dumps({{"ok": False, "error": str(e)}}))
+"""
+    return _run_py(host, ssh_cfg, script, timeout=timeout)
+
+
+def remote_host_network_ports(
+    host: Host, ssh_cfg: SshConfig | None, timeout: int = 30
+) -> dict[str, Any]:
+    script = """
+import subprocess, json, re
+
+try:
+    p = subprocess.run(['ss', '-tulnp'], capture_output=True, text=True)
+    if p.returncode != 0:
+        print(json.dumps({"ok": False, "error": p.stderr}))
+        exit(0)
+
+    ports = []
+    lines = p.stdout.strip().splitlines()
+    for line in lines[1:]:
+        parts = line.split()
+        if len(parts) >= 6:
+            proto = parts[0]
+            local_addr = parts[4]
+            process_col = parts[6] if len(parts) > 6 else ""
+
+            procs = []
+            if "users:((" in process_col:
+                matches = re.findall(r'"?([^",]+)"?,pid=(\\d+)', process_col)
+                procs = [{{"name": m[0].strip('"'), "pid": int(m[1])}} for m in matches]
+
+            ports.append({
+                "protocol": proto,
+                "local_address": local_addr,
+                "processes": procs
+            })
+
+    print(json.dumps({"ok": True, "ports": ports}))
+except Exception as e:
+    print(json.dumps({"ok": False, "error": str(e)}))
+"""
+    return _run_py(host, ssh_cfg, script, timeout=timeout)
+
+
+def remote_manage_packages(
+    host: Host, ssh_cfg: SshConfig | None, action: str, packages: list[str], timeout: int = 300
+) -> dict[str, Any]:
+    script = f"""
+import subprocess, json, shutil
+
+action = {json.dumps(action)}
+packages = {json.dumps(packages)}
+
+res = {{"ok": False, "manager": "unknown", "action": action, "packages": packages}}
+
+try:
+    mgr = None
+    if shutil.which('apt-get'):
+        mgr = 'apt'
+    elif shutil.which('dnf'):
+        mgr = 'dnf'
+
+    res["manager"] = mgr
+    if not mgr:
+        res["error"] = "No supported package manager found"
+        print(json.dumps(res))
+        exit(0)
+
+    cmd = []
+    if mgr == 'apt':
+        apt_opts = ['-o', 'Dpkg::Options::=--force-confdef', '-o', 'Dpkg::Options::=--force-confold']
+        if action == 'install':
+            cmd = ['sudo', '-n', 'DEBIAN_FRONTEND=noninteractive', 'apt-get', 'install', '-y'] + apt_opts + packages
+        elif action == 'update':
+            cmd = ['sudo', '-n', 'apt-get', 'update']
+        elif action == 'upgrade':
+            cmd = ['sudo', '-n', 'DEBIAN_FRONTEND=noninteractive', 'apt-get', 'upgrade', '-y'] + apt_opts
+    elif mgr == 'dnf':
+        if action == 'install':
+            cmd = ['sudo', '-n', 'dnf', 'install', '-y'] + packages
+        elif action == 'update' or action == 'upgrade':
+            cmd = ['sudo', '-n', 'dnf', 'upgrade', '-y']
+
+    if not cmd:
+        res["error"] = "Invalid action"
+        print(json.dumps(res))
+        exit(0)
+
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    res["ok"] = (p.returncode == 0)
+    res["stdout"] = p.stdout[-10000:] if p.stdout else ""
+    res["stderr"] = p.stderr[-5000:] if p.stderr else ""
+    print(json.dumps(res))
+except Exception as e:
+    res["error"] = str(e)
+    print(json.dumps(res))
+"""
+    return _run_py(host, ssh_cfg, script, timeout=timeout)
+
+
+def remote_run_sql_query(
+    host: Host,
+    ssh_cfg: SshConfig | None,
+    engine: str,
+    db: str,
+    query: str,
+    user: str = "",
+    password: str = "",
+    host_addr: str = "",
+    timeout: int = 60,
+) -> dict[str, Any]:
+    script = f"""
+import subprocess, json, csv, io, os
+
+engine = {json.dumps(engine)}
+db = {json.dumps(db)}
+query = {json.dumps(query)}
+user = {json.dumps(user)}
+pwd = {json.dumps(password)}
+h_addr = {json.dumps(host_addr)}
+
+res = {{"ok": False}}
+try:
+    if engine == 'sqlite':
+        p = subprocess.run(['sqlite3', '-json', db, query], capture_output=True, text=True)
+        if p.returncode == 0:
+            try:
+                res["results"] = json.loads(p.stdout)
+                res["ok"] = True
+            except:
+                res["results"] = p.stdout
+                res["ok"] = True
+        else:
+            res["error"] = p.stderr
+    elif engine == 'psql':
+        env = os.environ.copy()
+        if pwd: env['PGPASSWORD'] = pwd
+        cmd = ['psql', '-d', db, '-c', query, '-A', '-F', '\\t']
+        if user: cmd.extend(['-U', user])
+        if h_addr: cmd.extend(['-h', h_addr])
+        p = subprocess.run(cmd, capture_output=True, text=True, env=env)
+        if p.returncode == 0:
+            if p.stdout.strip():
+                reader = csv.DictReader(io.StringIO(p.stdout), delimiter='\\t')
+                res["results"] = list(reader)[:1000]
+            else:
+                res["results"] = []
+            res["ok"] = True
+        else:
+            res["error"] = p.stderr
+    elif engine == 'mysql':
+        env = os.environ.copy()
+        if pwd: env['MYSQL_PWD'] = pwd
+        cmd = ['mysql', '-D', db, '-e', query, '--batch']
+        if user: cmd.extend(['-u', user])
+        if h_addr: cmd.extend(['-h', h_addr])
+        p = subprocess.run(cmd, capture_output=True, text=True, env=env)
+        if p.returncode == 0:
+            if p.stdout.strip():
+                reader = csv.DictReader(io.StringIO(p.stdout), delimiter='\\t')
+                res["results"] = list(reader)[:1000]
+            else:
+                res["results"] = []
+            res["ok"] = True
+        else:
+            res["error"] = p.stderr
+    else:
+        res["error"] = "Unsupported engine"
+    print(json.dumps(res))
+except Exception as e:
+    res["error"] = str(e)
+    print(json.dumps(res))
+"""
+    return _run_py(host, ssh_cfg, script, timeout=timeout)
+
+
+def replace_block(
+    host: Host,
+    ssh_cfg: SshConfig | None,
+    path: str,
+    old_text: str,
+    new_text: str,
+    timeout: int = 30,
+) -> dict[str, Any]:
+    """Sostituisce un blocco esatto di testo in un file."""
+    script = f"""
+import json, os
+
+path = {json.dumps(path)}
+old_text = {json.dumps(old_text)}
+new_text = {json.dumps(new_text)}
+
+path = os.path.expanduser(path)
+if not os.path.exists(path):
+    print(json.dumps({{"success": False, "error": f"File not found: {{path}}" }}))
+    exit(0)
+
+try:
+    with open(path, 'r', encoding='utf-8') as f:
+        content = f.read()
+
+    if old_text not in content:
+        print(json.dumps({{"success": False, "error": "old_text non trovato nel file"}}))
+        exit(0)
+
+    if content.count(old_text) > 1:
+        print(json.dumps({{"success": False, "error": "old_text trovato più volte, sii più specifico"}}))
+        exit(0)
+
+    content = content.replace(old_text, new_text)
+
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(content)
+
+    print(json.dumps({{"success": True, "message": "Blocco sostituito con successo"}}))
+except Exception as e:
+    print(json.dumps({{"success": False, "error": str(e)}}))
+"""
+    return _run_py(host, ssh_cfg, script, timeout=timeout)
+
+
+def project_tree(
+    host: Host,
+    ssh_cfg: SshConfig | None,
+    path: str,
+    max_depth: int = 3,
+    exclude: list[str] | None = None,
+    timeout: int = 30,
+) -> dict[str, Any]:
+    """Genera un albero delle directory ignorando cartelle noise (node_modules, .git)."""
+    if exclude is None:
+        exclude = [".git", "node_modules", "venv", ".venv", "__pycache__", "dist", "build"]
+
+    script = f"""
+import json, os
+
+base_path = {json.dumps(path)}
+max_depth = {max_depth}
+exclude = {json.dumps(exclude)}
+
+base_path = os.path.expanduser(base_path)
+
+if not os.path.exists(base_path):
+    print(json.dumps({{"error": f"Path not found: {{base_path}}" }}))
+    exit(0)
+
+tree = []
+base_depth = base_path.rstrip(os.sep).count(os.sep)
+
+for root, dirs, files in os.walk(base_path):
+    dirs[:] = [d for d in dirs if d not in exclude and not d.startswith('.')]
+
+    current_depth = root.rstrip(os.sep).count(os.sep) - base_depth
+    if current_depth > max_depth:
+        dirs[:] = []
+        continue
+
+    indent = "  " * current_depth
+    name = os.path.basename(root) if current_depth > 0 else base_path
+    tree.append(f"{{indent}}{{name}}/")
+
+    for f in files:
+        if not f.startswith('.'):
+            tree.append(f"{{indent}}  {{f}}")
+
+print(json.dumps({{"tree": tree[:1000]}})) # limit to 1000 items to save tokens
+"""
+    return _run_py(host, ssh_cfg, script, timeout=timeout)
