@@ -23,8 +23,23 @@ DEFAULT_CONNECT_TIMEOUT = "4"
 # Shell/processi che indicano "nessun processo in primo piano" (pane idle).
 # NB: 'node' NON è incluso: molte TUI (es. opencode) girano proprio come 'node'.
 SHELL_COMMANDS = {
-    "bash", "zsh", "sh", "dash", "fish", "ksh", "tcsh", "csh", "ash",
-    "login", "tmux", "nu", "xonsh", "elvish", "oil", "osh", "pwsh",
+    "bash",
+    "zsh",
+    "sh",
+    "dash",
+    "fish",
+    "ksh",
+    "tcsh",
+    "csh",
+    "ash",
+    "login",
+    "tmux",
+    "nu",
+    "xonsh",
+    "elvish",
+    "oil",
+    "osh",
+    "pwsh",
 }
 
 # Delimitatore "impossibile": separa i campi di una formattazione tmux senza
@@ -237,6 +252,7 @@ class TmuxActionResult:
     ok: bool = False
     stdout: str = ""
     stderr: str = ""
+    mode: str = ""
 
 
 def run_tmux_action(
@@ -385,14 +401,104 @@ def tmux_capture_pane(
 
 
 def tmux_send_keys(
-    host: Host, session: str, text: str, cfg: SshConfig | None = None
+    host: Host,
+    session: str,
+    text: str,
+    cfg: SshConfig | None = None,
+    *,
+    enter: bool = False,
 ) -> TmuxActionResult:
-    """Invia ``text`` come testo letterale alla sessione tmux (send-keys -l)."""
-    return run_tmux_action(
-        host,
-        f"tmux send-keys -t {_sh_quote(session)} -l {_sh_quote(text)}",
-        cfg,
+    """Invia ``text`` come testo letterale alla sessione tmux (send-keys -l).
+
+    Con ``enter=True`` concatena atomicamente l'invio del tasto Enter.
+    """
+    if enter:
+        cmd = f"tmux send-keys -t {_sh_quote(session)} -l {_sh_quote(text)} \\; send-keys -t {_sh_quote(session)} Enter"
+    else:
+        cmd = f"tmux send-keys -t {_sh_quote(session)} -l {_sh_quote(text)}"
+    return run_tmux_action(host, cmd, cfg)
+
+
+def tmux_send_input(
+    host: Host,
+    session: str,
+    text: str,
+    cfg: SshConfig | None = None,
+    *,
+    enter: bool = True,
+    mode: str = "auto",
+    bracketed: bool = True,
+    settle_delay: float = 0.0,
+    capture_lines: int = 0,
+) -> TmuxActionResult:
+    """Invia input a una sessione tmux con gestione atomica di invio e multiriga.
+
+    Modalità (``mode``):
+    - ``auto``: usa bracketed paste se il testo ha newline, tabulazioni, lunghezza > 100
+      o caratteri di controllo; altrimenti usa ``keys`` atomico.
+    - ``paste``: forza bracketed paste via buffer tmux dedicato caricato in base64.
+    - ``keys``: forza ``send-keys -l`` atomico.
+
+    Parametri avanzati:
+    - ``enter``: se True (default), invia il tasto Enter al termine.
+    - ``settle_delay``: secondi di attesa (es. 0.2) prima di Enter (utile per TUI lente).
+    - ``capture_lines``: se > 0, concatena la cattura delle ultime N righe della pane
+      nello stesso comando atomico, restituendole in ``res.stdout``.
+    """
+    import base64
+    import time
+    import uuid
+
+    cfg = cfg or SshConfig()
+    mode_val = (mode or "auto").strip().lower()
+    if mode_val not in ("auto", "paste", "keys"):
+        mode_val = "auto"
+
+    if not text:
+        if enter:
+            res = tmux_send_enter(host, session, cfg)
+            res.mode = "keys"
+            return res
+        return TmuxActionResult(ok=True, stdout="", stderr="", mode="noop")
+
+    use_paste = mode_val == "paste" or (
+        mode_val == "auto"
+        and (
+            "\n" in text
+            or "\t" in text
+            or len(text) > 100
+            or any(ord(c) < 32 for c in text)
+        )
     )
+
+    capture_part = (
+        f" && tmux capture-pane -p -t {_sh_quote(session)} -S -{int(capture_lines)}"
+        if capture_lines > 0
+        else ""
+    )
+
+    if use_paste:
+        name = f"bravoric_input_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
+        b64 = base64.b64encode(text.encode("utf-8")).decode("ascii")
+        flag = "-p " if bracketed else ""
+        delay_part = f" && sleep {settle_delay:.2f}" if settle_delay > 0 and enter else ""
+        enter_part = f"{delay_part} && tmux send-keys -t {_sh_quote(session)} Enter" if enter else ""
+        cmd = (
+            f"printf %s {_sh_quote(b64)} | base64 -d | tmux load-buffer -b {_sh_quote(name)} - && "
+            f"{{ tmux paste-buffer {flag}-b {_sh_quote(name)} -t {_sh_quote(session)}"
+            f"{enter_part}{capture_part}; rc=$?; "
+            f"tmux delete-buffer -b {_sh_quote(name)} 2>/dev/null; exit $rc; }}"
+        )
+        res = run_tmux_action(host, cmd, cfg)
+        res.mode = "paste"
+        return res
+
+    delay_part = f" && sleep {settle_delay:.2f}" if settle_delay > 0 and enter else ""
+    enter_part = f"{delay_part} && tmux send-keys -t {_sh_quote(session)} Enter" if enter else ""
+    cmd = f"tmux send-keys -l -t {_sh_quote(session)} {_sh_quote(text)}{enter_part}{capture_part}"
+    res = run_tmux_action(host, cmd, cfg)
+    res.mode = "keys"
+    return res
 
 
 def tmux_send_enter(host: Host, session: str, cfg: SshConfig | None = None) -> TmuxActionResult:
@@ -407,9 +513,7 @@ def tmux_send_raw(
     return run_tmux_action(host, f"tmux send-keys -t {_sh_quote(session)} {keys}", cfg)
 
 
-def tmux_pane_command(
-    host: Host, session: str, cfg: SshConfig | None = None
-) -> TmuxActionResult:
+def tmux_pane_command(host: Host, session: str, cfg: SshConfig | None = None) -> TmuxActionResult:
     """Restituisce il comando in primo piano nella pane attiva (es. 'node', 'bash').
 
     Serve a capire se nella sessione gira una TUI/processo o solo la shell.
@@ -436,9 +540,7 @@ class PaneInfoResult:
     is_shell: bool = False
 
 
-def tmux_pane_info(
-    host: Host, session: str, cfg: SshConfig | None = None
-) -> PaneInfoResult:
+def tmux_pane_info(host: Host, session: str, cfg: SshConfig | None = None) -> PaneInfoResult:
     """Legge in UNA sola chiamata processo, CWD, PID, titolo e dimensioni della pane.
 
     Ritorna anche ``is_shell``: True se il processo in primo piano è una shell
@@ -460,9 +562,7 @@ def tmux_pane_info(
         cfg,
     )
     if not res.ok:
-        return PaneInfoResult(
-            ok=False, error=(res.stderr or "").strip() or f"exit {res.ok}"
-        )
+        return PaneInfoResult(ok=False, error=(res.stderr or "").strip() or f"exit {res.ok}")
     parts = (res.stdout or "").strip().split(PANE_DELIM)
     if len(parts) < 6:
         return PaneInfoResult(ok=False, error="Formato output tmux non valido")

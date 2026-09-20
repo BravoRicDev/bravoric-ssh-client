@@ -557,3 +557,116 @@ def test_transfer_file_download_failure(monkeypatch, tmp_path):
     )
     assert '"ok": false' in out
     assert '"stage": "download"' in out
+
+
+def test_send_input_modes(monkeypatch, tmp_path):
+    from bravoric_ssh_client.ssh import adapter
+
+    calls = []
+
+    def fake_send_input(host, session, text, cfg=None, **kwargs):
+        calls.append((host.alias, session, text, kwargs))
+        m = kwargs.get("mode") or "auto"
+        if m == "paste" or "\n" in text:
+            actual_m = "paste"
+        else:
+            actual_m = "keys"
+        return adapter.TmuxActionResult(ok=True, mode=actual_m, stdout="captured text" if kwargs.get("capture_lines") else "")
+
+    monkeypatch.setattr(adapter, "tmux_send_input", fake_send_input)
+    mcp = BravoricMcp(config=make_cfg(tmp_path))
+
+    # Single line short -> auto uses keys
+    out1 = _run(
+        _call(
+            mcp,
+            "send_input",
+            {"alias": "alpha", "session": "main", "text": "ls -la"},
+        )
+    )
+    assert '"ok": true' in out1
+    assert '"mode": "keys"' in out1
+    assert '"enter": true' in out1
+    assert calls[-1][2] == "ls -la"
+    assert calls[-1][3]["enter"] is True
+
+    # Multiline -> auto uses paste
+    out2 = _run(
+        _call(
+            mcp,
+            "send_input",
+            {"alias": "alpha", "session": "main", "text": "line1\nline2", "enter": False},
+        )
+    )
+    assert '"ok": true' in out2
+    assert '"mode": "paste"' in out2
+    assert '"enter": false' in out2
+    assert calls[-1][3]["enter"] is False
+
+    # Force mode paste
+    out3 = _run(
+        _call(
+            mcp,
+            "send_input",
+            {"alias": "alpha", "session": "main", "text": "single", "mode": "paste"},
+        )
+    )
+    assert '"ok": true' in out3
+    assert '"mode": "paste"' in out3
+
+    # With capture_lines
+    out_cap = _run(
+        _call(
+            mcp,
+            "send_input",
+            {"alias": "alpha", "session": "main", "text": "status", "capture_lines": 10},
+        )
+    )
+    assert '"ok": true' in out_cap
+    assert '"captured_lines": "captured text"' in out_cap
+
+    # Alias send_line
+    out_line = _run(
+        _call(
+            mcp,
+            "send_line",
+            {"alias": "alpha", "session": "main", "text": "git status"},
+        )
+    )
+    assert '"ok": true' in out_line
+    assert calls[-1][2] == "git status"
+    assert calls[-1][3]["enter"] is True
+
+    # Invalid mode
+    out_err = _run(
+        _call(
+            mcp,
+            "send_input",
+            {"alias": "alpha", "session": "main", "text": "test", "mode": "invalid"},
+        )
+    )
+    assert '"ok": false' in out_err
+    assert "mode non valido" in out_err
+
+
+def test_send_keys_with_enter(monkeypatch, tmp_path):
+    from bravoric_ssh_client.ssh import adapter
+
+    calls = []
+
+    def fake_send_keys(host, session, text, cfg=None, enter=False):
+        calls.append((host.alias, session, text, enter))
+        return adapter.TmuxActionResult(ok=True)
+
+    monkeypatch.setattr(adapter, "tmux_send_keys", fake_send_keys)
+    mcp = BravoricMcp(config=make_cfg(tmp_path))
+
+    out = _run(
+        _call(
+            mcp,
+            "send_keys",
+            {"alias": "alpha", "session": "main", "text": "continua", "enter": True},
+        )
+    )
+    assert out == "inviato"
+    assert calls[-1] == ("alpha", "main", "continua", True)

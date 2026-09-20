@@ -113,3 +113,65 @@ def test_askpass_helper_contains_password_only_in_env(monkeypatch, host: Host, t
     assert any(
         "BRAVORIC_PASSWORD" in e and e["BRAVORIC_PASSWORD"] == "pw-super-segreta" for e in calls
     )
+
+
+def test_tmux_send_input(monkeypatch, host: Host):
+    from bravoric_ssh_client.ssh.adapter import tmux_send_input
+
+    captured_cmds: list[str] = []
+
+    def fake_run(args, **kwargs):
+        # The command passed to ssh is the last argument in argv
+        captured_cmds.append(args[-1])
+        return FakeCompleted(0, "")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    cfg = SshConfig()
+
+    # 1. Single line short -> keys mode with Enter
+    res1 = tmux_send_input(host, "sess", "echo hi", cfg, enter=True)
+    assert res1.ok
+    assert res1.mode == "keys"
+    assert (
+        "tmux send-keys -l -t 'sess' 'echo hi' && tmux send-keys -t 'sess' Enter"
+        in captured_cmds[-1]
+    )
+
+    # 2. Single line short -> keys mode WITHOUT Enter
+    res2 = tmux_send_input(host, "sess", "echo hi", cfg, enter=False)
+    assert res2.ok
+    assert res2.mode == "keys"
+    assert captured_cmds[-1] == "tmux send-keys -l -t 'sess' 'echo hi'"
+
+    # 3. Multiline -> paste mode with base64 and Enter
+    res3 = tmux_send_input(host, "sess", "line1\nline2", cfg, enter=True)
+    assert res3.ok
+    assert res3.mode == "paste"
+    cmd3 = captured_cmds[-1]
+    assert "tmux load-buffer -b" in cmd3
+    assert "tmux paste-buffer -p -b" in cmd3
+    assert "tmux send-keys -t 'sess' Enter" in cmd3
+    assert "tmux delete-buffer -b" in cmd3
+
+    # 4. Multiline -> paste mode WITHOUT Enter
+    res4 = tmux_send_input(host, "sess", "line1\nline2", cfg, enter=False)
+    assert res4.ok
+    assert res4.mode == "paste"
+    cmd4 = captured_cmds[-1]
+    assert "send-keys -t 'sess' Enter" not in cmd4
+
+    # 5. Empty text with enter=True
+    res5 = tmux_send_input(host, "sess", "", cfg, enter=True)
+    assert res5.ok
+    assert res5.mode == "keys"
+    assert captured_cmds[-1] == "tmux send-keys -t 'sess' Enter"
+
+    # 6. With capture_lines
+    res6 = tmux_send_input(host, "sess", "ls", cfg, enter=True, capture_lines=40)
+    assert res6.ok
+    assert "capture-pane -p -t 'sess' -S -40" in captured_cmds[-1]
+
+    # 7. With settle_delay
+    res7 = tmux_send_input(host, "sess", "a\nb", cfg, enter=True, settle_delay=0.25)
+    assert res7.ok
+    assert "sleep 0.25" in captured_cmds[-1]

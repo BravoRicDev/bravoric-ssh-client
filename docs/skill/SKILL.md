@@ -15,9 +15,15 @@ Il server MCP `bravoric-ssh` (stdio) espone l'intera infrastruttura di server SS
 - Non usare comandi shell locali (`find`, `cat`, `grep`, `docker`, `tmux`) su risorse che vivono sui server remoti (es. `lumon-principale`, `mioaruba`).
 - Non assumere mai che il codice o le sessioni siano sul tuo `localhost`: consulta `.pi/TOPOLOGIA-SESSIONI.md` e usa **SEMPRE i tool MCP con il parametro `alias` esplicito**.
 
-### 2. COMUNICAZIONE TMUX: MAI `send_keys` PER TESTI LUNGHI, USA SEMPRE `paste`!
-- **`paste(alias, session, content, bracketed: true, enter: true)`**: È il metodo TASSATIVO per inviare prompt, codice o messaggi multi-riga. Gestisce il bracketed paste e previene la corruzione dei caratteri.
-- **`capture_pane(alias, session, lines=30)`**: Leggi lo stato del terminale prima di inviare testo.
+### 2. COMUNICAZIONE TMUX: USA `send_input` O `send_line` (STANDARD UNIVERSALE)
+- **`send_input(alias, session, text, enter=True, mode="auto", capture_lines=0)`**: È il metodo **standard e universale** per inviare prompt, comandi o messaggi alle sessioni tmux.
+  - Invia `Enter` atomico di default (elimina doppi tool call).
+  - Con `capture_lines=20` (o più) invia l'input e cattura il terminale risultante in un **singolo roundtrip SSH**.
+  - Con `mode="auto"` commuta automaticamente tra bracketed paste sicuro via buffer (per testi multiriga, con tab, >100 caratteri o byte speciali) e send-keys atomico per comandi brevi.
+- **`send_line(alias, session, text, capture_lines=0)`**: Alias rapido di `send_input` per inviare una riga di comando con Invio garantito.
+- **`paste(alias, session, content, bracketed: true, enter: true)`**: Per blocchi corposi di codice o file locali.
+- **NON usare mai `send_keys` grezzo per prompt o codice**: causa corruzione, auto-indent selvaggio o troncamenti.
+- **`capture_pane(alias, session, lines=30)`** o **`pane_diff`**: Leggi lo stato del terminale prima o dopo l'invio.
 - **Riconoscimento stato agente**:
   - Se vedi `interrupt` o `esc interrupt` in basso a sinistra (in OpenCode/Pi): **l'agente STA ELABORANDO**. NON disturbare e NON inviare tasti!
   - Solo se `interrupt` è ASSENTE e il prompt è libero, invia input.
@@ -62,13 +68,15 @@ Per non saturare la finestra di contesto con dump giganteschi, usa i **4 tool di
 - `transfer_file(source_alias, source_path, dest_alias, dest_path)`: trasferimento server-to-server con verifica MD5 (usato quando due server non si raggiungono direttamente).
 
 ### Sessioni tmux & Controllo Agenti
+- `send_input(alias, session, text="", enter=True, mode="auto", bracketed=True, settle_delay=0.0, capture_lines=0)`: **Tool universale e raccomandato per inviare comandi e prompt a tmux**. Invia `Enter` atomico di default (elimina doppi tool call). Con `mode="auto"` sceglie automaticamente bracketed paste (per multiriga, tab o testo lungo) o send-keys atomico. Con `capture_lines > 0` restituisce anche l'output catturato del terminale in un unico roundtrip SSH.
+- `send_line(alias, session, text="", capture_lines=0)`: **Alias rapido** di `send_input` con `enter=True` garantito.
 - `list_sessions(alias)`: elenca le sessioni su un host.
 - `list_sessions_all`: elenca tutte le sessioni di tutti gli host con un'unica chiamata.
 - `create_session(alias, session, command)`: crea sessione detached con auto-massimizzazione.
 - `capture_pane(alias, session, lines=30)`: legge il buffer del terminale (ultime N righe).
 - `pane_diff(alias, session, max_lines=200, reset=False)`: **diff incrementale** dell'output della pane (restituisce SOLO le righe comparse dall'ultima lettura, azzerando lo spreco di token nei controlli periodici).
 - `pane_info(alias, session)`: restituisce processo attivo, CWD, PID, titolo e geometria della pane.
-- `paste(alias, session, content, bracketed: true, enter: true)`: incolla testo in modo sicuro con bracketed paste.
+- `paste(alias, session, content, bracketed: true, enter: true)`: incolla testo in modo sicuro con bracketed paste via buffer tmux.
 - `tmux_run_and_wait_prompt(alias, session, command, prompt_regex, timeout=30)`: esegue un comando in una sessione tmux e attende il prompt atteso (regex), restituendo l'output generato senza blocchi.
 - `pane_command(alias, session)`: restituisce il comando attivo nella pane (es. `opencode`, `pi`, `node`, `bash`).
 - `close_foreground(alias, session, method="auto")`: chiude in sicurezza la TUI/processo attivo (escalation ordinata `C-c` -> `C-d`).

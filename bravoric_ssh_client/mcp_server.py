@@ -699,9 +699,90 @@ class BravoricMcp:
             }
         )
 
-    def send_keys(self, alias: str, session: str, text: str) -> str:
-        res = adapter.tmux_send_keys(self._host(alias), session, text, self._ssh_cfg())
+    def send_keys(self, alias: str, session: str, text: str, enter: bool = False) -> str:
+        res = adapter.tmux_send_keys(
+            self._host(alias), session, text, self._ssh_cfg(), enter=bool(enter)
+        )
         return "inviato" if res.ok else f"errore: {(res.stderr or '').strip()}"
+
+    def send_input(
+        self,
+        alias: str,
+        session: str,
+        text: str = "",
+        enter: bool = True,
+        mode: str = "auto",
+        bracketed: bool = True,
+        settle_delay: float = 0.0,
+        capture_lines: int = 0,
+    ) -> str:
+        """Invia input a una sessione tmux con gestione universale di invio e multiriga.
+
+        Tool standard e universale raccomandato per inviare qualsiasi input a tmux:
+        - Invia Invio (Enter) di default (disattivabile con ``enter=False``).
+        - Con ``mode="auto"`` usa automaticamente bracketed paste se il testo ha newline,
+          tabulazioni, lunghezza > 100 caratteri o caratteri di controllo, altrimenti usa send-keys atomico.
+        - ``mode`` può essere forzato a "auto", "paste" o "keys".
+        - ``settle_delay``: attesa opzionale in secondi prima di Enter (utile per TUI lente).
+        - ``capture_lines``: se > 0, concatena e restituisce immediatamente le ultime N righe
+          della pane in un solo roundtrip SSH.
+        """
+        host = self._host(alias)
+        mode_val = (mode or "auto").strip().lower()
+        if mode_val not in ("auto", "paste", "keys"):
+            return self._dump(
+                {
+                    "ok": False,
+                    "error": f"mode non valido: '{mode}'. I valori ammessi sono 'auto', 'paste', 'keys'.",
+                }
+            )
+
+        text_str = text or ""
+        res = adapter.tmux_send_input(
+            host,
+            session,
+            text_str,
+            self._ssh_cfg(),
+            enter=bool(enter),
+            mode=mode_val,
+            bracketed=bool(bracketed),
+            settle_delay=float(settle_delay or 0.0),
+            capture_lines=int(capture_lines or 0),
+        )
+        if not res.ok:
+            return self._dump(
+                {"ok": False, "error": (res.stderr or "").strip() or "send_input fallito"}
+            )
+
+        lines_count = len(text_str.splitlines()) if text_str else 0
+        data: dict[str, Any] = {
+            "ok": True,
+            "host": alias,
+            "session": session,
+            "mode": res.mode or "keys",
+            "chars": len(text_str),
+            "lines": lines_count,
+            "enter": bool(enter),
+        }
+        if capture_lines > 0:
+            data["captured_lines"] = res.stdout.strip()
+        return self._dump(data)
+
+    def send_line(
+        self,
+        alias: str,
+        session: str,
+        text: str = "",
+        capture_lines: int = 0,
+    ) -> str:
+        """Invia una riga di comando o testo con Enter automatico (alias di send_input)."""
+        return self.send_input(
+            alias=alias,
+            session=session,
+            text=text,
+            enter=True,
+            capture_lines=capture_lines,
+        )
 
     def send_enter(self, alias: str, session: str) -> str:
         res = adapter.tmux_send_enter(self._host(alias), session, self._ssh_cfg())
@@ -824,9 +905,10 @@ class BravoricMcp:
                 "eof": [("key", "C-d")],
                 "exit": [("text", "/exit")],
             }
-            steps = table.get(method)
-            if steps is None:
+            steps_opt: list[tuple[str, str]] | None = table.get(method)
+            if steps_opt is None:
                 return f"errore: metodo sconosciuto '{method}' (usa auto|sigint|sigint2|eof|exit)"
+            steps = steps_opt
 
         done: list[str] = []
         for kind, val in steps:
@@ -946,8 +1028,7 @@ class BravoricMcp:
                             ),
                         }
                     )
-            adapter.tmux_send_keys(host, session, fallback, cfg)
-            adapter.tmux_send_enter(host, session, cfg)
+            adapter.tmux_send_input(host, session, fallback, cfg, enter=True)
             return self._dump(
                 {
                     "ok": True,
@@ -1018,8 +1099,7 @@ class BravoricMcp:
             )
 
         # 5) rilancio
-        adapter.tmux_send_keys(host, session, command, cfg)
-        adapter.tmux_send_enter(host, session, cfg)
+        adapter.tmux_send_input(host, session, command, cfg, enter=True)
         return self._dump(
             {
                 "ok": True,
@@ -1739,6 +1819,16 @@ class BravoricMcp:
                 "Cattura l'output di una sessione (ultime lines righe).",
             ),
             ("send_keys", "send_keys", "Invia testo letterale alla sessione."),
+            (
+                "send_input",
+                "send_input",
+                "Invia testo universale (comandi, prompt, multiriga) a tmux con Invio atomico di default.",
+            ),
+            (
+                "send_line",
+                "send_line",
+                "Invia riga di comando o testo con Enter automatico (alias rapido di send_input).",
+            ),
             ("send_enter", "send_enter", "Invia Invio alla sessione."),
             ("send_raw", "send_raw", "Invia tasti tmux non letterali (es. C-c, Up)."),
             (
