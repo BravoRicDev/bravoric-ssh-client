@@ -1,6 +1,6 @@
 ---
 name: bravoric-ssh
-description: "Use bravoric-ssh MCP server (tools bravoric-ssh_*) to control SSH hosts and tmux sessions managed by the user's bravoric-ssh-client: list hosts, create/drive detached tmux sessions (send-keys/capture-pane/paste), run batch commands in parallel, broadcast snippets, inspect remote files with token-efficient tools (search_files, read_file, git_status, host_health), manage SSH tunnels and read audit logs. Use when the user asks to check, control, or drive their servers/tmux sessions through the MCP server."
+description: "Use bravoric-ssh MCP server (tools bravoric-ssh_*) to control SSH hosts and tmux sessions managed by the user's bravoric-ssh-client: list hosts, create/drive detached tmux sessions (send-keys/capture-pane/paste), run batch commands in parallel, broadcast snippets, inspect and safely edit remote files with token-efficient tools (search_files, read_file, write_file, edit_file, git_status, host_health, host_top_processes), manage SSH tunnels and read audit logs. Use when the user asks to check, control, or drive their servers/tmux sessions through the MCP server."
 ---
 
 # bravoric-ssh MCP — Guida Operativa Ufficiale per gli Agenti
@@ -45,11 +45,14 @@ Per non saturare la finestra di contesto con dump giganteschi, usa i **4 tool di
 - `get_status`: info sul demone locale, tmux locale e configurazione.
 - `ping(alias)` / `ping_all`: verifica connettività e latenza SSH.
 - `hosts_summary`: dashboard completa di tutti gli host (reachability, tmux attivo, conteggio sessioni).
-- `host_health(alias)`: diagnostica hardware e container del server remoto.
+- `host_health(alias)`: diagnostica hardware e container del server remoto (CPU load, RAM libera, disco `/` e `/home`, Docker).
+- `host_top_processes(alias, limit=10, sort_by="cpu"|"mem")`: elenca i processi più pesanti per consumo CPU o RAM sull'host remoto.
 
-### File Remoti (Efficienza e Trasferimento)
+### File Remoti (Efficienza, Scrittura e Trasferimento)
 - `search_files(alias, path, pattern, mode, text, max_results)`: cerca file e contenuti (grep remoto).
-- `read_file(alias, path, offset, limit, unit)`: lettura selettiva a blocchi.
+- `read_file(alias, path, offset, limit, unit)`: lettura selettiva a blocchi senza `cat`/`head`.
+- `write_file(alias, path, content="", mode="overwrite"|"append")`: scrive o appende contenuto a un file remoto via base64 (nessun problema di escaping bash o quoting).
+- `edit_file(alias, path, pattern, replacement="", count=0)`: sostituzione sicura di pattern/stringhe all'interno di file remoti con sed (count=0 sostituisce tutte le occorrenze).
 - `git_status(alias, path)`: stato git strutturato e leggero.
 - `sftp_download(alias, remote_path, local_path)`: scarica da server a locale.
 - `sftp_upload(alias, local_path, remote_path)`: carica da locale a server.
@@ -82,6 +85,7 @@ Per non saturare la finestra di contesto con dump giganteschi, usa i **4 tool di
 - `list_tunnels` / `start_tunnel` / `stop_tunnel`: apertura/chiusura tunnel TCP forward.
 - `tunnel_health`: verifica porte locali in ascolto dei tunnel attivi.
 - `read_audit_log` / `read_remote_audit_log`: ispezione registri operativi.
+- `session_audit_log(alias, session, max_lines=0)`: legge direttamente il log di audit associato a una specifica sessione tmux sull'host remoto.
 
 ---
 
