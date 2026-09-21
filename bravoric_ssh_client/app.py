@@ -2157,6 +2157,444 @@ class InfoScreen(BravoricScreen):
         self.app.pop_screen()
 
 
+class PaneInfoScreen(BravoricScreen):
+    """Mostra informazioni dettagliate sulla pane attiva di una sessione tmux.
+
+    Visualizza processo, CWD, PID, titolo, geometria e flag is_shell.
+    Si aggiorna automaticamente ogni 2 secondi. Usa `n`/`p` per cambiare
+    sessione, `r` per refresh manuale, `Esc`/`q` per chiudere.
+    """
+
+    BINDINGS = [
+        Binding("escape", "close", "Chiudi"),
+        Binding("q", "close", "Chiudi"),
+        Binding("n", "next", "Successiva"),
+        Binding("p", "prev", "Precedente"),
+        Binding("r", "refresh", "Refresh"),
+    ]
+
+    POLL_SECONDS = 2.0
+
+    def __init__(self, host: Host, session: str, sessions: list[str] | None = None):
+        super().__init__()
+        self._host = host
+        self._sessions = sessions or [session]
+        self._current_idx = 0
+        if session in self._sessions:
+            self._current_idx = self._sessions.index(session)
+        self._started = False
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        with Vertical(id="pw-box"):
+            yield Label("[b]Info pane[/b]", classes="box-title")
+            self._body = Static("Carico...", id="info-body")
+            yield self._body
+            yield Label(
+                "n/p: cambia sessione · r: refresh · Esc/q: chiudi",
+                classes="hint",
+            )
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self._started = True
+        self.refresh_info()
+        self.run_worker(self._poll_loop(), thread=False, name="pane-info-poll")
+
+    @property
+    def _current_session(self) -> str:
+        if not self._sessions:
+            return ""
+        return self._sessions[self._current_idx]
+
+    def refresh_info(self) -> None:
+        self.run_worker(self._load_info(), thread=False, exclusive=True)
+
+    async def _load_info(self) -> None:
+        session = self._current_session
+        if not session:
+            self._body.update("[dim]nessuna sessione[/dim]")
+            return
+        try:
+            info = await _io(ssh_adapter.tmux_pane_info, self._host, session, self.app.ssh_cfg)
+        except Exception as exc:
+            self._body.update(f"[red]Errore: {exc}[/red]")
+            return
+        if not info.ok:
+            self._body.update(f"[red]Errore: {info.error}[/red]")
+            return
+        # Formattiamo le info in modo leggibile
+        status = (
+            "[green]idle (shell)[/green]" if info.is_shell else "[yellow]processo attivo[/yellow]"
+        )
+        lines = [
+            f"[b]Sessione:[/b] {session}",
+            f"[b]Processo:[/b] {info.command}  {status}",
+            f"[b]CWD:[/b] {info.cwd or '(n/d)'}",
+            f"[b]PID:[/b] {info.pid or '-'}",
+            f"[b]Titolo:[/b] {info.title or '(nessuno)'}",
+            f"[b]Geometria:[/b] {info.width}x{info.height}",
+            "",
+            f"[dim]Aggiornamento automatico ogni {int(self.POLL_SECONDS)}s[/dim]",
+        ]
+        self._body.update("\n".join(lines))
+
+    async def _poll_loop(self) -> None:
+        import asyncio
+
+        while self._started:
+            await asyncio.sleep(self.POLL_SECONDS)
+            if self._started:
+                self.refresh_info()
+
+    def action_close(self) -> None:
+        self._started = False
+        self.app.pop_screen()
+
+    def action_next(self) -> None:
+        if len(self._sessions) <= 1:
+            return
+        self._current_idx = (self._current_idx + 1) % len(self._sessions)
+        self.refresh_info()
+
+    def action_prev(self) -> None:
+        if len(self._sessions) <= 1:
+            return
+        self._current_idx = (self._current_idx - 1) % len(self._sessions)
+        self.refresh_info()
+
+    def action_refresh(self) -> None:
+        self.refresh_info()
+
+
+class LaunchAgentScreen(BravoricScreen):
+    """Schermata per lanciare un agente AI (opencode, claude, pi) in tmux detached.
+
+    Permette di configurare: agente, directory di lavoro, argomenti extra, titolo,
+    prompt iniziale, e opzioni avanzate (force, timeout, capture lines).
+    Il lancio avviene in background e la schermata mostra lo stato di avanzamento.
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Annulla"),
+        Binding("ctrl+s", "submit", "Lancia"),
+        Binding("ctrl+r", "refresh", "Refresh"),
+    ]
+
+    CSS = """
+    LaunchAgentScreen #agent-form Input { margin: 0 0 1 0; }
+    LaunchAgentScreen #status-box { height: 3; }
+    LaunchAgentScreen #output-box { height: 1fr; }
+    """
+
+    _AGENTS = ["opencode", "claude", "pi"]
+
+    def __init__(self, host: Host, config: Config):
+        super().__init__()
+        self._host = host
+        self._config = config
+        self._status_text = Static("Pronto per il lancio", id="status-box", classes="hint")
+        self._output = Static("", id="output-box")
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        with Vertical(id="agent-form", classes="box"):
+            yield Label("[b]Lancia agente AI[/b]", classes="box-title")
+            yield Label(f"Host: {self._host.alias}")
+            yield Label("Agente:")
+            yield Input(id="agent", placeholder="opencode / claude / pi", value="opencode")
+            yield Label("Directory di lavoro:")
+            yield Input(id="path", placeholder="/percorso/completo")
+            yield Label("Titolo (opzionale):")
+            yield Input(id="title", placeholder="nome sessione")
+            yield Label("Argomenti extra (opzionale):")
+            yield Input(id="extra", placeholder='--model gpt-5, run "prompt"')
+            yield Label("Prompt iniziale (opzionale, multiriga con \\n):")
+            yield Input(id="prompt", placeholder="prompt da inviare all'agente")
+            yield Label("Timeout attesa (s):")
+            yield Input(id="timeout", placeholder="25", value="25")
+            yield Label("Force (ricrea se esiste):")
+            yield Input(id="force", placeholder="true / false", value="false")
+            yield Label("Ctrl+S: lancia · Ctrl+R: refresh · Esc: annulla", classes="hint")
+        yield self._status_text
+        yield self._output
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.query_one("#agent", Input).focus()
+
+    def action_refresh(self) -> None:
+        self._status_text.update("Refresh...")
+        self._output.update("")
+
+    async def action_submit(self) -> None:
+        agent = self.query_one("#agent", Input).value.strip()
+        path = self.query_one("#path", Input).value.strip()
+        title = self.query_one("#title", Input).value.strip()
+        extra = self.query_one("#extra", Input).value.strip()
+        prompt = self.query_one("#prompt", Input).value.strip()
+        timeout_str = self.query_one("#timeout", Input).value.strip()
+        force_str = self.query_one("#force", Input).value.strip().lower()
+
+        if not agent:
+            self.app.notify("Seleziona un agente", severity="error")
+            return
+        if agent not in self._AGENTS:
+            self.app.notify(
+                f"Agente non valido. Scegli tra: {', '.join(self._AGENTS)}", severity="error"
+            )
+            return
+        if not path:
+            self.app.notify("Inserisci una directory di lavoro", severity="error")
+            return
+
+        try:
+            timeout = int(timeout_str)
+        except ValueError:
+            timeout = 25
+        force = force_str in ("true", "1", "yes")
+
+        self._status_text.update("Lancio agente in corso...")
+        self._output.update("")
+
+        await self._launch_agent(agent, path, title, extra, prompt, timeout, force)
+
+    async def _launch_agent(
+        self,
+        agent: str,
+        path: str,
+        title: str,
+        extra_args: str,
+        prompt: str,
+        wait_timeout: int,
+        force: bool,
+    ) -> None:
+        """Esegue il lancio richiamando le funzioni adapter, replicando MCP launch_agent."""
+        import time as _time
+
+        cfg = self.app.ssh_cfg
+        q = _sh_quote
+        started = _time.time()
+
+        # 1. Pre-check: directory e binario
+        self._status_text.update("Controllo pre-requisiti...")
+        pre = await _io(
+            ssh_adapter.run_tmux_action,
+            self._host,
+            f"bash -lc 'if [ -d {q(path)} ]; then echo PATH_OK; else echo PATH_MISSING; fi ; "
+            f"if command -v {q(agent)} >/dev/null 2>&1; then echo BIN_OK; "
+            f"else echo BIN_MISSING; fi'",
+            cfg,
+        )
+        pre_out = pre.stdout or ""
+        if "PATH_MISSING" in pre_out:
+            self._status_text.update(f"[red]Errore: directory inesistente: {path}[/]")
+            return
+        if "BIN_MISSING" in pre_out:
+            self._status_text.update(
+                f"[red]Errore: binario '{agent}' non trovato su {self._host.alias}[/]"
+            )
+            return
+
+        # 2. Nome sessione
+        sess_title = title or f"{agent}-{Path(path).name or 'agent'}"
+        # slug sicuro
+        import re
+
+        slug = re.sub(r"[^A-Za-z0-9_-]+", "-", sess_title.strip())
+        slug = re.sub(r"-{2,}", "-", slug).strip("-_")[:40] or f"{agent}-{_time.time():.0f}"
+        win_title = (
+            re.sub(r"[\x00-\x1f\x7f]", "", sess_title).replace(":", "-").replace(".", "-")[:50]
+        )
+
+        # 3. Gestione collisione sessione
+        has = await _io(
+            ssh_adapter.run_tmux_action,
+            self._host,
+            f"tmux has-session -t {q(slug)} 2>/dev/null",
+            cfg,
+        )
+        if has.ok:
+            if not force:
+                self._status_text.update(
+                    f"[red]Sessione '{slug}' già esistente (usa Force=true per ricreare)[/]"
+                )
+                return
+            await _io(
+                ssh_adapter.run_tmux_action,
+                self._host,
+                f"tmux kill-session -t {q(slug)} 2>/dev/null",
+                cfg,
+            )
+
+        # 4. Crea sessione detached
+        self._status_text.update("Creazione sessione tmux...")
+        res = await _io(
+            ssh_adapter.run_tmux_action,
+            self._host,
+            f"tmux new -d -s {q(slug)} -c {q(path)} 'exec bash -l'",
+            cfg,
+        )
+        if not res.ok:
+            self._status_text.update(
+                f"[red]Errore creazione sessione: {res.stderr.strip() or 'fallita'}[/]"
+            )
+            return
+
+        # 5. Rinomina finestra (best-effort)
+        if win_title:
+            await _io(
+                ssh_adapter.run_tmux_action,
+                self._host,
+                f"tmux rename-window -t {q(slug + ':0')} {q(win_title)}",
+                cfg,
+            )
+
+        # 6. Attendi che la shell sia pronta
+        self._status_text.update("Attesa shell pronta...")
+        settle_deadline = _time.time() + 3.0
+        while _time.time() < settle_deadline:
+            info = await _io(ssh_adapter.tmux_pane_info, self._host, slug, cfg)
+            if info.ok and info.is_shell:
+                break
+            await _io(_time.sleep, 0.2)
+
+        # 7. Invio comando agente
+        cmd = f"{agent} {extra_args}".strip()
+        self._status_text.update(f"Invio comando: {cmd}")
+        send = await _io(
+            ssh_adapter.tmux_send_input, self._host, slug, cmd, cfg, enter=True, mode="keys"
+        )
+        if not send.ok:
+            self._status_text.update(
+                f"[red]Errore invio comando: {send.stderr.strip() or 'fallito'}[/]"
+            )
+            return
+
+        # 8. Polling caricamento TUI
+        self._status_text.update(f"Attesa caricamento TUI (max {wait_timeout}s)...")
+        probe_cmd = (
+            f"tmux has-session -t {q(slug)} 2>/dev/null && echo HAS || echo NONE ; "
+            f"echo __SEP__ ; "
+            f"tmux display-message -p -t {q(slug)} '#{{pane_current_command}}' 2>/dev/null ; "
+            f"echo __SEP__ ; "
+            f"tmux capture-pane -p -t {q(slug)} -S -200 2>/dev/null"
+        )
+        deadline = _time.time() + wait_timeout
+        last_screen: str | None = None
+        stable_since: float | None = None
+        non_shell_since: float | None = None
+        saw_non_shell = False
+        pane_command = ""
+        screen = ""
+
+        while True:
+            raw = (await _io(ssh_adapter.run_tmux_action, self._host, probe_cmd, cfg)).stdout or ""
+            parts = raw.split("__SEP__")
+            alive = bool(parts) and parts[0].strip().endswith("HAS")
+            pane_command = parts[1].strip() if len(parts) > 1 else ""
+            screen = parts[2].strip("\n") if len(parts) > 2 else ""
+            now = _time.time()
+
+            if not alive:
+                self._status_text.update("[red]Sessione terminata inaspettatamente[/]")
+                self._output.update(screen or "(nessun output)")
+                return
+
+            # Detect launch error
+            err = self._detect_launch_error(screen)
+            if err:
+                self._status_text.update(f"[red]Errore avvio: {err}[/]")
+                self._output.update(screen)
+                return
+
+            cmd_clean = ssh_adapter.clean_cmd(pane_command)
+            if cmd_clean in ssh_adapter.SHELL_COMMANDS:
+                if saw_non_shell:
+                    self._status_text.update("[yellow]Agente terminato durante polling[/]")
+                    self._output.update(screen)
+                    return
+                stable_since = None
+                non_shell_since = None
+            else:
+                saw_non_shell = True
+                if non_shell_since is None:
+                    non_shell_since = now
+                if screen != last_screen:
+                    last_screen = screen
+                    stable_since = now
+                elif stable_since is None:
+                    stable_since = now
+
+                if (stable_since and now - stable_since >= 1.2) or (now - non_shell_since >= 8.0):
+                    # TUI caricata
+                    if prompt:
+                        self._status_text.update("Invio prompt iniziale...")
+                        ps = await _io(
+                            ssh_adapter.tmux_send_input,
+                            self._host,
+                            slug,
+                            prompt,
+                            cfg,
+                            enter=True,
+                            mode="auto",
+                            bracketed=True,
+                        )
+                        if not ps.ok:
+                            self._status_text.update(
+                                f"[red]Errore invio prompt: {ps.stderr.strip()}[/]"
+                            )
+                            return
+                        await _io(_time.sleep, 2.0)
+                        post = await _io(
+                            ssh_adapter.tmux_capture_pane, self._host, slug, cfg, lines=200
+                        )
+                        screen = (post.stdout or screen).strip("\n")
+
+                    elapsed = int((_time.time() - started) * 1000)
+                    self._status_text.update(f"[green]Agente lanciato in {elapsed}ms[/]")
+                    self._output.update(f"Sessione: {slug}\nProcesso: {pane_command}\n\n{screen}")
+                    self.app.notify(
+                        f"Agente '{agent}' lanciato in '{slug}'", severity="information"
+                    )
+                    return
+
+            if now >= deadline:
+                self._status_text.update(
+                    f"[yellow]Timeout: TUI non caricata entro {wait_timeout}s[/]"
+                )
+                self._output.update(screen)
+                return
+
+            await _io(_time.sleep, 0.6)
+
+    @staticmethod
+    def _detect_launch_error(screen: str) -> str:
+        """Ritorna la riga di errore d'avvio se presente, altrimenti ''."""
+        for line in (screen or "").splitlines():
+            low = line.lower()
+            for pat in (
+                "command not found",
+                "no such file or directory",
+                "permission denied",
+                "cannot execute",
+                "eacces",
+                "is a directory",
+                "traceback",
+                "invalid api key",
+                "not logged in",
+                "authentication failed",
+                "unauthorized",
+                "login required",
+            ):
+                if pat in low:
+                    return line.strip()
+        return ""
+
+    def action_cancel(self) -> None:
+        self.app.pop_screen()
+
+
 class SnippetCatalogScreen(BravoricScreen):
     """Catalogo snippet: scegli uno da eseguire in broadcast su più host."""
 
@@ -2487,6 +2925,10 @@ class SessionScreen(BravoricScreen):
         Binding("W", "new_window", "Nuova finestra"),
         Binding("D", "detach_clients", "Detach client"),
         Binding("g", "refresh", "Aggiorna"),
+        Binding("i", "pane_info", "Info pane"),
+        Binding("a", "launch_agent", "Lancia agente"),
+        Binding("P", "send_text", "Invia testo"),
+        Binding("F", "send_file", "Invia file"),
         Binding("q", "quit", "Esci"),
     ]
 
@@ -2758,6 +3200,18 @@ class SessionScreen(BravoricScreen):
             self.app.notify("Nessuna sessione selezionata")
             return
         self.app.push_screen(WindowsScreen(self._host, name))
+
+    def action_pane_info(self) -> None:
+        """Apri la schermata con informazioni dettagliate sulla pane attiva."""
+        name = self._selected_session()
+        if not name:
+            self.app.notify("Nessuna sessione selezionata")
+            return
+        self.app.push_screen(PaneInfoScreen(self._host, name, sessions=self._sessions))
+
+    def action_launch_agent(self) -> None:
+        """Apri la schermata per lanciare un agente AI in una sessione tmux."""
+        self.app.push_screen(LaunchAgentScreen(self._host, self._config))
 
     def action_new_window(self) -> None:
         name = self._selected_session()
