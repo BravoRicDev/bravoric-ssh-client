@@ -611,6 +611,154 @@ class BravoricMcp:
             }
         )
 
+    # ---------- nuovi tool SFTP nativi ----------
+
+    def sftp_list(self, alias: str, path: str) -> str:
+        """Elenca il contenuto di una directory remota via SFTP."""
+        from .ssh import file_ops
+
+        host = self._host(alias)
+        res = file_ops.sftp_list(host, path, self._password_for(host))
+        return self._dump(
+            {
+                "host": alias,
+                "path": path,
+                "ok": res.ok,
+                "stdout": res.stdout,
+                "stderr": res.stderr,
+            }
+        )
+
+    def sftp_mkdir(self, alias: str, path: str) -> str:
+        """Crea una directory remota via SFTP."""
+        from .ssh import file_ops
+
+        host = self._host(alias)
+        res = file_ops.sftp_mkdir(host, path, self._password_for(host))
+        return self._dump(
+            {
+                "host": alias,
+                "path": path,
+                "ok": res.ok,
+                "stdout": res.stdout,
+                "stderr": res.stderr,
+            }
+        )
+
+    def sftp_rm(self, alias: str, path: str) -> str:
+        """Rimuove un file o directory remota via SFTP."""
+        from .ssh import file_ops
+
+        host = self._host(alias)
+        res = file_ops.sftp_rm(host, path, self._password_for(host))
+        return self._dump(
+            {
+                "host": alias,
+                "path": path,
+                "ok": res.ok,
+                "stdout": res.stdout,
+                "stderr": res.stderr,
+            }
+        )
+
+    def sftp_rename(self, alias: str, old_path: str, new_path: str) -> str:
+        """Rinomina o sposta un file/directory remota via SFTP."""
+        from .ssh import file_ops
+
+        host = self._host(alias)
+        res = file_ops.sftp_rename(host, old_path, new_path, self._password_for(host))
+        return self._dump(
+            {
+                "host": alias,
+                "old": old_path,
+                "new": new_path,
+                "ok": res.ok,
+                "stdout": res.stdout,
+                "stderr": res.stderr,
+            }
+        )
+
+    def sftp_get(self, alias: str, remote: str, local: str, recursive: bool = False) -> str:
+        """Scarica file o directory via SFTP (supporta ricorsione)."""
+        from .ssh import file_ops
+
+        host = self._host(alias)
+        local_path = Path(local).expanduser()
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        res = file_ops.sftp_get(host, remote, str(local_path), self._password_for(host), recursive=recursive)
+        return self._dump(
+            {
+                "host": alias,
+                "remote": remote,
+                "local": str(local_path),
+                "recursive": recursive,
+                "ok": res.ok,
+                "stdout": res.stdout,
+                "stderr": res.stderr,
+            }
+        )
+
+    def sftp_put(self, alias: str, local: str, remote: str, recursive: bool = False) -> str:
+        """Carica file o directory via SFTP (supporta ricorsione)."""
+        from .ssh import file_ops
+
+        host = self._host(alias)
+        local_path = Path(local).expanduser()
+        res = file_ops.sftp_put(host, str(local_path), remote, self._password_for(host), recursive=recursive)
+        return self._dump(
+            {
+                "host": alias,
+                "local": str(local_path),
+                "remote": remote,
+                "recursive": recursive,
+                "ok": res.ok,
+                "stdout": res.stdout,
+                "stderr": res.stderr,
+            }
+        )
+
+    def sftp_batch(self, alias: str, commands: list[str]) -> str:
+        """Esegue comandi SFTP arbitrari in batch."""
+        from .ssh import file_ops
+
+        host = self._host(alias)
+        res = file_ops.sftp_batch(host, commands, self._password_for(host))
+        return self._dump(
+            {
+                "host": alias,
+                "commands": commands,
+                "ok": res.ok,
+                "stdout": res.stdout,
+                "stderr": res.stderr,
+            }
+        )
+
+    def transfer_file_direct(
+        self, src_alias: str, src_path: str, dst_alias: str, dst_path: str
+    ) -> str:
+        """Trasferisce un file direttamente tra due host remoti usando SFTP streaming (senza staging locale)."""
+        from .ssh import file_ops
+
+        src = self._host(src_alias)
+        dst = self._host(dst_alias)
+        res = file_ops.transfer_file_direct(
+            src,
+            src_path,
+            dst,
+            dst_path,
+            self._password_for(src),
+            self._password_for(dst),
+        )
+        return self._dump(
+            {
+                "src": f"{src_alias}:{src_path}",
+                "dst": f"{dst_alias}:{dst_path}",
+                "ok": res.ok,
+                "stdout": res.stdout,
+                "stderr": res.stderr,
+            }
+        )
+
     # ---------- sessioni tmux ----------
 
     def list_sessions(self, alias: str) -> str:
@@ -2029,6 +2177,46 @@ class BravoricMcp:
                 "transfer_file",
                 "transfer_file",
                 "Trasferisce un file tra due host via temp locale (md5 riportato).",
+            ),
+            (
+                "sftp_list",
+                "sftp_list",
+                "Elenca il contenuto di una directory remota via SFTP nativo.",
+            ),
+            (
+                "sftp_mkdir",
+                "sftp_mkdir",
+                "Crea una directory remota via SFTP nativo.",
+            ),
+            (
+                "sftp_rm",
+                "sftp_rm",
+                "Rimuove un file o directory remota via SFTP nativo.",
+            ),
+            (
+                "sftp_rename",
+                "sftp_rename",
+                "Rinomina o sposta un file/directory remota via SFTP nativo.",
+            ),
+            (
+                "sftp_get",
+                "sftp_get",
+                "Scarica file o directory via SFTP nativo (supporta ricorsione).",
+            ),
+            (
+                "sftp_put",
+                "sftp_put",
+                "Carica file o directory via SFTP nativo (supporta ricorsione).",
+            ),
+            (
+                "sftp_batch",
+                "sftp_batch",
+                "Esegue comandi SFTP arbitrari in batch su un host.",
+            ),
+            (
+                "transfer_file_direct",
+                "transfer_file_direct",
+                "Trasferisce un file direttamente tra due host remoti usando SFTP streaming (senza staging locale).",
             ),
             (
                 "search_files",
