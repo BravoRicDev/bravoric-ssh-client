@@ -978,11 +978,13 @@ class BravoricMcp:
         command = f"{binary} {extra_args}".strip()
 
         # Pre-check (un solo roundtrip): directory e binario esistono sull'host.
+        # Usa bash -l per garantire che il PATH dell'utente (es. ~/.npm-global/bin)
+        # sia disponibile anche in SSH non-interattivo.
         pre = adapter.run_tmux_action(
             host,
-            f"if [ -d {q(path)} ]; then echo PATH_OK; else echo PATH_MISSING; fi ; "
+            f"bash -lc 'if [ -d {q(path)} ]; then echo PATH_OK; else echo PATH_MISSING; fi ; "
             f"if command -v {q(binary)} >/dev/null 2>&1; then echo BIN_OK; "
-            f"else echo BIN_MISSING; fi",
+            f"else echo BIN_MISSING; fi'",
             cfg,
         )
         pre_out = pre.stdout or ""
@@ -1020,8 +1022,11 @@ class BravoricMcp:
                 )
             adapter.run_tmux_action(host, f"tmux kill-session -t {q(name)} 2>/dev/null", cfg)
 
-        # Crea la sessione detached con cwd = path.
-        res = adapter.run_tmux_action(host, f"tmux new -d -s {q(name)} -c {q(path)}", cfg)
+        # Crea la sessione detached con cwd = path e login shell (-l) per
+        # garantire che il PATH dell'utente sia disponibile nella pane tmux.
+        res = adapter.run_tmux_action(
+            host, f"tmux new -d -s {q(name)} -c {q(path)} 'exec bash -l'", cfg
+        )
         if not res.ok:
             return result(
                 False,
