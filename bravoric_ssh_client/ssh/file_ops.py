@@ -9,7 +9,6 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -134,6 +133,7 @@ def download(
 
 # ── Nuovi Tool SFTP Nativi ───────────────────────────────────────────────────
 
+
 def sftp_list(
     host: Host, remote_path: str, password: str | None, *, timeout: int = 30
 ) -> SftpResult:
@@ -150,12 +150,12 @@ def sftp_mkdir(
     return _run_sftp_batch(host, [f"mkdir {remote_path}"], password, timeout=timeout)
 
 
-def sftp_rm(
-    host: Host, remote_path: str, password: str | None, *, timeout: int = 30
-) -> SftpResult:
+def sftp_rm(host: Host, remote_path: str, password: str | None, *, timeout: int = 30) -> SftpResult:
     """Rimuove un file o directory remota."""
     # sftp rm rimuove file, rmdir rimuove dir. Proviamo rm prima, rmdir come fallback.
-    return _run_sftp_batch(host, [f"rm {remote_path}", f"rmdir {remote_path}"], password, timeout=timeout)
+    return _run_sftp_batch(
+        host, [f"rm {remote_path}", f"rmdir {remote_path}"], password, timeout=timeout
+    )
 
 
 def sftp_rename(
@@ -166,19 +166,35 @@ def sftp_rename(
 
 
 def sftp_get(
-    host: Host, remote_path: str, local_path: str, password: str | None, *, recursive: bool = False, timeout: int = 120
+    host: Host,
+    remote_path: str,
+    local_path: str,
+    password: str | None,
+    *,
+    recursive: bool = False,
+    timeout: int = 120,
 ) -> SftpResult:
     """Scarica file o directory via sftp (supporta ricorsione)."""
     flag = "-r " if recursive else ""
-    return _run_sftp_batch(host, [f"get {flag}{remote_path} {local_path}"], password, timeout=timeout)
+    return _run_sftp_batch(
+        host, [f"get {flag}{remote_path} {local_path}"], password, timeout=timeout
+    )
 
 
 def sftp_put(
-    host: Host, local_path: str, remote_path: str, password: str | None, *, recursive: bool = False, timeout: int = 120
+    host: Host,
+    local_path: str,
+    remote_path: str,
+    password: str | None,
+    *,
+    recursive: bool = False,
+    timeout: int = 120,
 ) -> SftpResult:
     """Carica file o directory via sftp (supporta ricorsione)."""
     flag = "-r " if recursive else ""
-    return _run_sftp_batch(host, [f"put {flag}{local_path} {remote_path}"], password, timeout=timeout)
+    return _run_sftp_batch(
+        host, [f"put {flag}{local_path} {remote_path}"], password, timeout=timeout
+    )
 
 
 def sftp_batch(
@@ -270,10 +286,10 @@ def transfer_file_direct(
             env=dst_env,
         )
 
-        p_src.stdin.write(f"get {src_path} -\n".encode("utf-8"))
+        p_src.stdin.write(f"get {src_path} -\n".encode())
         p_src.stdin.close()
 
-        p_dst.stdin.write(f"put - {dst_path}\n".encode("utf-8"))
+        p_dst.stdin.write(f"put - {dst_path}\n".encode())
 
         # Stream loop
         while True:

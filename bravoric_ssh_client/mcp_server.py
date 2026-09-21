@@ -21,6 +21,19 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from . import __version__
+from .config import Config, Host, Tunnel, default_config_path, load_config
+from .credentials.factory import resolve_password
+from .snippets import Snippet, add_snippet, load_snippets, remove_snippet
+from .ssh import adapter
+from .ssh.audit import cfg_path_logs_dir, read_log_gz
+from .ssh.broadcast import (
+    run_snippet_on_hosts,
+    run_snippet_on_hosts_tmux,
+    session_slug,
+)
+from .ssh.tunnels import TunnelManager
+
 # Logger strutturato MCP
 mcp_logger = logging.getLogger("bravoric_ssh_client.mcp")
 
@@ -52,19 +65,6 @@ def _setup_logging():
 
 
 _setup_logging()
-
-from . import __version__
-from .config import Config, Host, Tunnel, default_config_path, load_config
-from .credentials.factory import resolve_password
-from .snippets import Snippet, add_snippet, load_snippets, remove_snippet
-from .ssh import adapter
-from .ssh.audit import cfg_path_logs_dir, read_log_gz
-from .ssh.broadcast import (
-    run_snippet_on_hosts,
-    run_snippet_on_hosts_tmux,
-    session_slug,
-)
-from .ssh.tunnels import TunnelManager
 
 
 def _dump_json(obj: Any) -> str:
@@ -685,7 +685,9 @@ class BravoricMcp:
         host = self._host(alias)
         local_path = Path(local).expanduser()
         local_path.parent.mkdir(parents=True, exist_ok=True)
-        res = file_ops.sftp_get(host, remote, str(local_path), self._password_for(host), recursive=recursive)
+        res = file_ops.sftp_get(
+            host, remote, str(local_path), self._password_for(host), recursive=recursive
+        )
         return self._dump(
             {
                 "host": alias,
@@ -704,7 +706,9 @@ class BravoricMcp:
 
         host = self._host(alias)
         local_path = Path(local).expanduser()
-        res = file_ops.sftp_put(host, str(local_path), remote, self._password_for(host), recursive=recursive)
+        res = file_ops.sftp_put(
+            host, str(local_path), remote, self._password_for(host), recursive=recursive
+        )
         return self._dump(
             {
                 "host": alias,
