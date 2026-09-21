@@ -76,6 +76,69 @@ def _dump_json(obj: Any) -> str:
 # come opencode girano proprio come 'node').
 _SHELL_COMMANDS = adapter.SHELL_COMMANDS
 
+# Agenti AI lanciabili via ``launch_agent``. Il valore è il binario invocato:
+# l'agent richiesto non viene mai interpolato nei comandi tmux, si mappa solo a
+# un binario noto (allowlist).
+_AGENT_COMMANDS = {
+    "opencode": "opencode",
+    "claude": "claude",
+    "pi": "pi",
+}
+
+# Pattern (case-insensitive) che indicano un fallimento all'avvio dell'agente.
+# Applicati solo mentre una shell è in primo piano, per non confondere il testo
+# normale di una TUI già carica.
+_LAUNCH_ERROR_PATTERNS = (
+    "command not found",
+    "no such file or directory",
+    "permission denied",
+    "cannot execute",
+    "eacces",
+    "is a directory",
+    "traceback (most recent call last)",
+    "invalid api key",
+    "not logged in",
+    "authentication failed",
+    "unauthorized",
+    "login required",
+)
+
+# Intervallo di polling durante l'attesa del caricamento della TUI (secondi).
+_LAUNCH_POLL_INTERVAL = 0.6
+# Il contenuto della pane deve restare identico per questo tempo perché la TUI
+# sia considerata "caricata" (evita di catturare un frame intermedio).
+_LAUNCH_STABLE_SECONDS = 1.2
+# Fallback anti-spinner: se la pane non è più una shell da questo tempo, la TUI
+# è considerata carica anche se il contenuto continua a cambiare.
+_LAUNCH_SPINNER_FALLBACK = 8.0
+
+
+def _slug_title(value: str, fallback: str = "agent") -> str:
+    """Slug sicuro per un nome di sessione tmux (niente '.' o ':', max 40 char)."""
+    import re
+
+    out = re.sub(r"[^A-Za-z0-9_-]+", "-", (value or "").strip())
+    out = re.sub(r"-{2,}", "-", out).strip("-_")
+    return out[:40] or fallback
+
+
+def _window_title(value: str) -> str:
+    """Titolo finestra tmux: rimuove caratteri di controllo e separatori di target."""
+    import re
+
+    out = re.sub(r"[\x00-\x1f\x7f]", "", (value or "").strip())
+    out = out.replace(":", "-").replace(".", "-")
+    return out[:50].strip()
+
+
+def _detect_launch_error(screen: str) -> str:
+    """Ritorna la riga che mostra un errore d'avvio, oppure '' se nessuna."""
+    for line in (screen or "").splitlines():
+        low = line.lower()
+        if any(pat in low for pat in _LAUNCH_ERROR_PATTERNS):
+            return line.strip()
+    return ""
+
 
 def _wait_run_and_read(
     mcp: BravoricMcp, host: Host, command: str, timeout: int, prefix: str
@@ -790,6 +853,289 @@ class BravoricMcp:
         if not res.ok:
             return f"errore: {(res.stderr or '').strip() or f'exit {res.ok}'}"
         return f"sessione '{name}' creata su {alias} (detached)"
+
+    def launch_agent(
+        self,
+        agent: str,
+        path: str,
+        extra_args: str = "",
+        title: str = "",
+        alias: str = "",
+        wait_timeout: int = 25,
+        capture_lines: int = 200,
+        force: bool = False,
+    ) -> str:
+        """Lancia un agente AI in una nuova sessione tmux detached e attende la TUI.
+
+        Parametri principali:
+        - ``agent``: uno tra ``opencode``, ``claude``, ``pi`` (case-insensitive).
+        - ``path``: directory di lavoro della sessione (deve esistere sull'host).
+        - ``extra_args``: testo passato alla shell *dopo* il comando dell'agente
+          (es. ``--model gpt-5`` oppure ``run "fix the bug"``). È input shell:
+          viene inviato letteralmente, senza quoting aggiuntivo.
+        - ``title``: titolo della sessione (usato per il nome sessione tmux e per
+          il nome della finestra). Se vuoto, derivato da ``agent`` + basename di
+          ``path``.
+
+        Parametri opzionali:
+        - ``alias``: host su cui lanciare; se vuoto usa il primo host locale.
+        - ``wait_timeout``: secondi massimi di attesa del caricamento TUI (5..120).
+        - ``capture_lines``: righe di pane incluse nel risultato (10..2000).
+        - ``force``: se una sessione omonima esiste, la termina e la ricrea.
+
+        Ritorna JSON: in caso di successo ``ok=true`` con ``captured`` (contenuto
+        della pane) e ``pane_command``; in caso di errore ``ok=false`` con
+        ``reason`` ed ``error`` (``bad_agent``, ``bad_path``, ``binary_missing``,
+        ``session_exists``, ``launch_error``, ``timeout``, ...).
+        Il reason ``completed`` indica che l'agente è partito ma è terminato
+        durante il polling (es. comando one-shot o errore silenzioso): i campi
+        ``captured`` e ``pane_command`` sono comunque inclusi nel risultato.
+        """
+        started = time.time()
+        cfg = self._ssh_cfg()
+        q = adapter._sh_quote
+
+        agent_key = (agent or "").strip().lower()
+        binary = _AGENT_COMMANDS.get(agent_key)
+        path = (path or "").strip()
+        title = (title or "").strip()
+        command = ""
+
+        def result(
+            ok: bool,
+            reason: str,
+            *,
+            name: str | None = None,
+            pane_command: str = "",
+            captured: str = "",
+            error: str = "",
+            **extra: Any,
+        ) -> str:
+            payload: dict[str, Any] = {
+                "ok": ok,
+                "alias": alias,
+                "title": title,
+                "session": name,
+                "path": path,
+                "agent": agent_key or agent,
+                "command": command,
+                "reason": reason,
+                "elapsed_ms": int((time.time() - started) * 1000),
+            }
+            if pane_command:
+                payload["pane_command"] = pane_command
+            if captured:
+                payload["captured"] = captured
+            if error:
+                payload["error"] = error
+            payload.update(extra)
+            return self._dump(payload)
+
+        if binary is None:
+            return result(
+                False,
+                "bad_agent",
+                error=(
+                    f"agent non supportato: {agent!r} "
+                    f"(attesi: {', '.join(sorted(_AGENT_COMMANDS))})"
+                ),
+            )
+        if not path:
+            return result(False, "bad_path", error="path mancante")
+
+        # Host: default = primo host locale configurato.
+        if not alias:
+            local = next((h for h in self._load_config().hosts if h.is_local()), None)
+            alias = local.alias if local else ""
+        if not alias:
+            return result(False, "no_local_host", error="nessun host locale configurato")
+        try:
+            host = self._host(alias)
+        except ValueError as exc:
+            return result(False, "unknown_host", error=str(exc))
+
+        try:
+            wait_timeout = max(5, min(120, int(wait_timeout)))
+        except (TypeError, ValueError):
+            wait_timeout = 25
+        try:
+            capture_lines = max(10, min(2000, int(capture_lines)))
+        except (TypeError, ValueError):
+            capture_lines = 200
+
+        title = title or f"{agent_key}-{Path(path).name or 'agent'}"
+        name = _slug_title(title, fallback=f"{agent_key}-{int(started)}")
+        command = f"{binary} {extra_args}".strip()
+
+        # Pre-check (un solo roundtrip): directory e binario esistono sull'host.
+        pre = adapter.run_tmux_action(
+            host,
+            f"if [ -d {q(path)} ]; then echo PATH_OK; else echo PATH_MISSING; fi ; "
+            f"if command -v {q(binary)} >/dev/null 2>&1; then echo BIN_OK; "
+            f"else echo BIN_MISSING; fi",
+            cfg,
+        )
+        pre_out = pre.stdout or ""
+        if "PATH_MISSING" in pre_out:
+            return result(
+                False,
+                "bad_path",
+                name=name,
+                error=f"directory inesistente su {alias}: {path}",
+            )
+        if "BIN_MISSING" in pre_out:
+            return result(
+                False,
+                "binary_missing",
+                name=name,
+                error=f"binario '{binary}' non trovato su {alias}",
+            )
+        if "PATH_OK" not in pre_out:
+            return result(
+                False,
+                "probe_failed",
+                name=name,
+                error=(pre.stderr or "").strip() or "pre-check fallito",
+            )
+
+        # Collisione con una sessione omonima.
+        exists = adapter.run_tmux_action(host, f"tmux has-session -t {q(name)} 2>/dev/null", cfg).ok
+        if exists:
+            if not force:
+                return result(
+                    False,
+                    "session_exists",
+                    name=name,
+                    error=(f"sessione '{name}' già esistente (usa force=true per ricrearla)"),
+                )
+            adapter.run_tmux_action(host, f"tmux kill-session -t {q(name)} 2>/dev/null", cfg)
+
+        # Crea la sessione detached con cwd = path.
+        res = adapter.run_tmux_action(host, f"tmux new -d -s {q(name)} -c {q(path)}", cfg)
+        if not res.ok:
+            return result(
+                False,
+                "create_failed",
+                name=name,
+                error=(res.stderr or "").strip() or "creazione sessione fallita",
+            )
+
+        # Titolo finestra (best-effort, non blocca).
+        win_title = _window_title(title)
+        if win_title:
+            adapter.run_tmux_action(
+                host, f"tmux rename-window -t {q(name + ':0')} {q(win_title)}", cfg
+            )
+
+        # Attende che la shell della nuova pane sia pronta, poi invia il comando.
+        settle_deadline = time.time() + 3.0
+        while time.time() < settle_deadline:
+            info = adapter.tmux_pane_info(host, name, cfg)
+            if info.ok and info.is_shell:
+                break
+            time.sleep(0.2)
+
+        send = adapter.tmux_send_input(host, name, command, cfg, enter=True, mode="keys")
+        if not send.ok:
+            return result(
+                False,
+                "send_failed",
+                name=name,
+                error=(send.stderr or "").strip() or "invio comando fallito",
+            )
+
+        # Attesa caricamento TUI: la pane smette di essere una shell e il
+        # contenuto resta stabile per ~1.2s (fallback anti-spinner dopo 8s).
+        sep = "__BRVSEP__"
+        probe_cmd = (
+            f"tmux has-session -t {q(name)} 2>/dev/null && echo HAS || echo NONE ; "
+            f"echo {sep} ; "
+            f"tmux display-message -p -t {q(name)} '#{{pane_current_command}}' 2>/dev/null ; "
+            f"echo {sep} ; "
+            f"tmux capture-pane -p -t {q(name)} -S -{capture_lines} 2>/dev/null"
+        )
+        deadline = time.time() + wait_timeout
+        last_screen: str | None = None
+        stable_since: float | None = None
+        non_shell_since: float | None = None
+        saw_non_shell = False
+        pane_command = ""
+        screen = ""
+
+        while True:
+            raw = adapter.run_tmux_action(host, probe_cmd, cfg).stdout or ""
+            parts = raw.split(sep)
+            alive = bool(parts) and parts[0].strip().endswith("HAS")
+            pane_command = parts[1].strip() if len(parts) > 1 else ""
+            screen = parts[2].strip("\n") if len(parts) > 2 else ""
+            now = time.time()
+
+            if not alive:
+                return result(
+                    False,
+                    "session_gone",
+                    name=name,
+                    pane_command=pane_command,
+                    captured=screen,
+                    error="la sessione non esiste più",
+                )
+
+            if self._is_shell(pane_command):
+                err = _detect_launch_error(screen)
+                if err:
+                    return result(
+                        False,
+                        "launch_error",
+                        name=name,
+                        pane_command=pane_command,
+                        captured=screen,
+                        error=err,
+                    )
+                # Il processo è partito (non-shell) e ora la shell è tornata in
+                # primo piano: l'agente è terminato (es. comando one-shot).
+                if saw_non_shell:
+                    return result(
+                        True,
+                        "completed",
+                        name=name,
+                        pane_command=pane_command,
+                        captured=screen,
+                        is_shell=True,
+                    )
+                stable_since = None
+                non_shell_since = None
+                last_screen = screen
+            else:
+                saw_non_shell = True
+                if non_shell_since is None:
+                    non_shell_since = now
+                if screen != last_screen:
+                    last_screen = screen
+                    stable_since = now
+                elif stable_since is None:
+                    stable_since = now
+                if (stable_since is not None and now - stable_since >= _LAUNCH_STABLE_SECONDS) or (
+                    now - non_shell_since >= _LAUNCH_SPINNER_FALLBACK
+                ):
+                    return result(
+                        True,
+                        "tui_loaded",
+                        name=name,
+                        pane_command=pane_command,
+                        captured=screen,
+                        is_shell=False,
+                    )
+
+            if now >= deadline:
+                return result(
+                    False,
+                    "timeout",
+                    name=name,
+                    pane_command=pane_command,
+                    captured=screen,
+                    error=f"TUI non caricata entro {wait_timeout}s",
+                )
+            time.sleep(_LAUNCH_POLL_INTERVAL)
 
     def session_details(self, alias: str, name: str) -> str:
         res = adapter.tmux_session_details(self._host(alias), name, self._ssh_cfg())
@@ -2039,6 +2385,13 @@ class BravoricMcp:
                 "create_session",
                 "create_session",
                 "Crea una sessione tmux detached su un host (comando opzionale).",
+            ),
+            (
+                "launch_agent",
+                "launch_agent",
+                "Lancia un agente AI (opencode|claude|pi) in una nuova sessione tmux "
+                "detached (cwd + titolo), attende il caricamento della TUI e ritorna "
+                "esito + contenuto della pane.",
             ),
             ("session_details", "session_details", "Dettagli di una sessione tmux."),
             ("rename_session", "rename_session", "Rinomina una sessione tmux."),

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import gzip
+import json
 from pathlib import Path
 
 import pytest
@@ -49,6 +50,7 @@ def test_tools_registered(tmp_path):
         "ping_all",
         "list_sessions",
         "create_session",
+        "launch_agent",
         "session_details",
         "rename_session",
         "kill_session",
@@ -722,3 +724,241 @@ def test_get_metrics(tmp_path):
     assert "tool_calls" in metrics
     assert "errors" in metrics
     assert "total_duration_ms" in metrics
+
+
+# ---------- launch_agent ----------
+
+
+class _FakeAction:
+    def __init__(self, ok=True, stdout="", stderr=""):
+        self.ok = ok
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def _probe(alive=True, pane_cmd="node", screen="welcome"):
+    """Costruisce la risposta del probe combinato (has-session ; cmd ; capture)."""
+    sep = "__BRVSEP__"
+    head = "HAS" if alive else "NONE"
+    return f"{head}\n{sep}\n{pane_cmd}\n{sep}\n{screen}\n"
+
+
+def _install_launch_mocks(
+    monkeypatch,
+    *,
+    probe_script,
+    has_session=False,
+    pane_is_shell=True,
+    sent=None,
+    path_ok=True,
+    bin_ok=True,
+):
+    """Installa i mock dell'adapter per `launch_agent` e ritorna i comandi tmux."""
+    from bravoric_ssh_client.ssh import adapter
+
+    calls: list[str] = []
+    probes = list(probe_script)
+
+    def fake_run_action(host, command, cfg=None, timeout=20):
+        calls.append(command)
+        if "PATH_OK" in command:  # pre-check path/binario
+            out = ("PATH_OK" if path_ok else "PATH_MISSING") + "\n"
+            out += ("BIN_OK" if bin_ok else "BIN_MISSING") + "\n"
+            return _FakeAction(True, out, "")
+        if "has-session" in command and "__BRVSEP__" not in command:
+            return _FakeAction(has_session, "", "")
+        if "tmux new -d" in command:
+            return _FakeAction(True, "", "")
+        if "rename-window" in command:
+            return _FakeAction(True, "", "")
+        if "__BRVSEP__" in command:  # probe di polling
+            if len(probes) > 1:
+                return _FakeAction(True, probes.pop(0), "")
+            return _FakeAction(True, probes[0] if probes else "", "")
+        return _FakeAction(True, "", "")
+
+    def fake_send_input(host, session, text, cfg=None, **kw):
+        if sent is not None:
+            sent.append(text)
+        return _FakeAction(True, "", "")
+
+    monkeypatch.setattr(adapter, "run_tmux_action", fake_run_action)
+    monkeypatch.setattr(
+        adapter,
+        "tmux_pane_info",
+        lambda host, session, cfg=None: adapter.PaneInfoResult(
+            ok=True, command="bash", is_shell=pane_is_shell
+        ),
+    )
+    monkeypatch.setattr(adapter, "tmux_send_input", fake_send_input)
+    return calls
+
+
+def test_launch_agent_ok(monkeypatch, tmp_path):
+    from bravoric_ssh_client import mcp_server as mcp_mod
+
+    monkeypatch.setattr(mcp_mod, "_LAUNCH_STABLE_SECONDS", 0.0)
+    monkeypatch.setattr(mcp_mod, "_LAUNCH_POLL_INTERVAL", 0.0)
+    sent: list[str] = []
+    calls = _install_launch_mocks(
+        monkeypatch,
+        probe_script=[_probe(pane_cmd="node", screen="OpenCode ready")],
+        sent=sent,
+    )
+    mcp = BravoricMcp(config=make_cfg(tmp_path))
+    out = json.loads(
+        _run(
+            _call(
+                mcp,
+                "launch_agent",
+                {
+                    "agent": "opencode",
+                    "path": "/home/x/proj",
+                    "extra_args": "--model gpt-5",
+                    "title": "Mio Agente",
+                },
+            )
+        )
+    )
+    assert out["ok"] is True
+    assert out["reason"] == "tui_loaded"
+    assert out["session"] == "Mio-Agente"
+    assert out["pane_command"] == "node"
+    assert out["command"] == "opencode --model gpt-5"
+    assert "OpenCode ready" in out["captured"]
+    assert sent == ["opencode --model gpt-5"]
+    assert any("tmux new -d -s" in c and "Mio-Agente" in c and "/home/x/proj" in c for c in calls)
+    # l'host di default è quello locale
+    assert out["alias"] == "loc"
+
+
+def test_launch_agent_bad_agent(monkeypatch, tmp_path):
+    _install_launch_mocks(monkeypatch, probe_script=[])
+    mcp = BravoricMcp(config=make_cfg(tmp_path))
+    out = json.loads(_run(_call(mcp, "launch_agent", {"agent": "gpt", "path": "/tmp"})))
+    assert out["ok"] is False
+    assert out["reason"] == "bad_agent"
+    assert "non supportato" in out["error"]
+
+
+def test_launch_agent_missing_path(monkeypatch, tmp_path):
+    calls = _install_launch_mocks(monkeypatch, probe_script=[], path_ok=False)
+    mcp = BravoricMcp(config=make_cfg(tmp_path))
+    out = json.loads(_run(_call(mcp, "launch_agent", {"agent": "pi", "path": "/nope"})))
+    assert out["ok"] is False
+    assert out["reason"] == "bad_path"
+    assert not any("tmux new -d" in c for c in calls)
+
+
+def test_launch_agent_binary_missing(monkeypatch, tmp_path):
+    calls = _install_launch_mocks(monkeypatch, probe_script=[], bin_ok=False)
+    mcp = BravoricMcp(config=make_cfg(tmp_path))
+    out = json.loads(_run(_call(mcp, "launch_agent", {"agent": "claude", "path": "/tmp"})))
+    assert out["ok"] is False
+    assert out["reason"] == "binary_missing"
+    assert not any("tmux new -d" in c for c in calls)
+
+
+def test_launch_agent_session_exists(monkeypatch, tmp_path):
+    calls = _install_launch_mocks(monkeypatch, probe_script=[], has_session=True)
+    mcp = BravoricMcp(config=make_cfg(tmp_path))
+    out = json.loads(
+        _run(
+            _call(
+                mcp,
+                "launch_agent",
+                {"agent": "pi", "path": "/tmp", "title": "dup"},
+            )
+        )
+    )
+    assert out["ok"] is False
+    assert out["reason"] == "session_exists"
+    assert not any("tmux new -d" in c for c in calls)
+
+
+def test_launch_agent_force_recreates(monkeypatch, tmp_path):
+    from bravoric_ssh_client import mcp_server as mcp_mod
+
+    monkeypatch.setattr(mcp_mod, "_LAUNCH_STABLE_SECONDS", 0.0)
+    monkeypatch.setattr(mcp_mod, "_LAUNCH_POLL_INTERVAL", 0.0)
+    calls = _install_launch_mocks(monkeypatch, probe_script=[_probe()], has_session=True)
+    mcp = BravoricMcp(config=make_cfg(tmp_path))
+    out = json.loads(
+        _run(
+            _call(
+                mcp,
+                "launch_agent",
+                {"agent": "pi", "path": "/tmp", "title": "dup", "force": True},
+            )
+        )
+    )
+    assert out["ok"] is True
+    assert any("kill-session" in c and "dup" in c for c in calls)
+    assert any("tmux new -d" in c for c in calls)
+
+
+def test_launch_agent_launch_error(monkeypatch, tmp_path):
+    from bravoric_ssh_client import mcp_server as mcp_mod
+
+    monkeypatch.setattr(mcp_mod, "_LAUNCH_POLL_INTERVAL", 0.0)
+    _install_launch_mocks(
+        monkeypatch,
+        probe_script=[
+            _probe(
+                pane_cmd="bash",
+                screen="$ opencode --bad\nbash: opencode: command not found",
+            )
+        ],
+    )
+    mcp = BravoricMcp(config=make_cfg(tmp_path))
+    out = json.loads(_run(_call(mcp, "launch_agent", {"agent": "opencode", "path": "/tmp"})))
+    assert out["ok"] is False
+    assert out["reason"] == "launch_error"
+    assert "command not found" in out["error"]
+
+
+def test_launch_agent_timeout(monkeypatch, tmp_path):
+    from bravoric_ssh_client import mcp_server as mcp_mod
+
+    monkeypatch.setattr(mcp_mod, "_LAUNCH_POLL_INTERVAL", 0.05)
+    _install_launch_mocks(monkeypatch, probe_script=[_probe(pane_cmd="bash", screen="$ ")])
+    mcp = BravoricMcp(config=make_cfg(tmp_path))
+    out = json.loads(
+        _run(
+            _call(
+                mcp,
+                "launch_agent",
+                {"agent": "pi", "path": "/tmp", "wait_timeout": 5},
+            )
+        )
+    )
+    assert out["ok"] is False
+    assert out["reason"] == "timeout"
+    assert "captured" in out
+
+
+def test_launch_agent_completed(monkeypatch, tmp_path):
+    from bravoric_ssh_client import mcp_server as mcp_mod
+
+    monkeypatch.setattr(mcp_mod, "_LAUNCH_POLL_INTERVAL", 0.0)
+    _install_launch_mocks(
+        monkeypatch,
+        probe_script=[
+            _probe(pane_cmd="node", screen="running..."),
+            _probe(pane_cmd="bash", screen="usage: pi [options]"),
+        ],
+    )
+    mcp = BravoricMcp(config=make_cfg(tmp_path))
+    out = json.loads(
+        _run(
+            _call(
+                mcp,
+                "launch_agent",
+                {"agent": "pi", "path": "/tmp", "wait_timeout": 5},
+            )
+        )
+    )
+    assert out["ok"] is True
+    assert out["reason"] == "completed"
+    assert out["is_shell"] is True
+    assert "usage: pi" in out["captured"]
