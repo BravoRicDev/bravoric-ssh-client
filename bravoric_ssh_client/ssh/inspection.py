@@ -15,6 +15,9 @@ import json
 import shlex
 from typing import TYPE_CHECKING, Any
 
+# Limite massimo per lettura/scrittura file remoto (10 MB)
+MAX_FILE_SIZE = 10 * 1024 * 1024
+
 if TYPE_CHECKING:
     from ..config import Host
     from .adapter import SshConfig
@@ -36,6 +39,9 @@ def _run_py(
     out = (res.stdout or "").strip()
     try:
         data = json.loads(out)
+        if isinstance(data, dict):
+            if data.get("ok") is False or data.get("success") is False:
+                return data
         return {"ok": True, "data": data}
     except Exception as e:
         return {"ok": True, "raw": out, "parse_error": str(e)}
@@ -180,9 +186,15 @@ filepath = os.path.abspath(os.path.expanduser({json.dumps(path)}))
 offset = {offset_val}
 limit = {limit_val}
 unit = {json.dumps(unit)}
+MAX_FILE_SIZE = {MAX_FILE_SIZE}
 
 if not os.path.isfile(filepath):
     print(json.dumps({{"error": "File non trovato o non regolare: " + filepath}}))
+    sys.exit(0)
+
+file_size = os.path.getsize(filepath)
+if file_size > MAX_FILE_SIZE:
+    print(json.dumps({{"ok": False, "error": "File troppo grande ({{}} > {{}})".format(file_size, MAX_FILE_SIZE), "code": "file_too_large"}}))
     sys.exit(0)
 
 try:
@@ -657,15 +669,28 @@ def remote_replace_block(
     b64_old = base64.b64encode(old_text.encode("utf-8")).decode("ascii")
     b64_new = base64.b64encode(new_text.encode("utf-8")).decode("ascii")
     script = f"""
-import base64, json, os
+import base64, json, os, shutil
 
 path = {json.dumps(path)}
 old_t = base64.b64decode({json.dumps(b64_old)})
 new_t = base64.b64decode({json.dumps(b64_new)})
+MAX_FILE_SIZE = {MAX_FILE_SIZE}
 
 try:
+    file_size = os.path.getsize(path)
+    if file_size > MAX_FILE_SIZE:
+        print(json.dumps({{"ok": False, "error": "File troppo grande per replace_block", "code": "file_too_large"}}))
+        exit(0)
+
+    # Chunked read: leggi in blocchi per evitare OOM
+    chunks = []
     with open(path, 'rb') as f:
-        content = f.read()
+        while True:
+            chunk = f.read(1024 * 1024)  # 1 MB chunks
+            if not chunk:
+                break
+            chunks.append(chunk)
+    content = b"".join(chunks)
 
     if old_t not in content:
         print(json.dumps({{"ok": False, "error": "old_text non trovato nel file"}}))
@@ -673,8 +698,10 @@ try:
         print(json.dumps({{"ok": False, "error": "old_text trovato più volte, sii più specifico"}}))
     else:
         content = content.replace(old_t, new_t, 1)
+        # Chunked write: scrivi in blocchi
         with open(path, 'wb') as f:
-            f.write(content)
+            for i in range(0, len(content), 1024 * 1024):
+                f.write(content[i:i + 1024 * 1024])
         print(json.dumps({{"ok": True, "path": path, "bytes": len(content)}}))
 except Exception as e:
     print(json.dumps({{"ok": False, "error": str(e)}}))
@@ -1015,6 +1042,11 @@ if not os.path.exists(path):
     exit(0)
 
 try:
+    file_size = os.path.getsize(path)
+    if file_size > MAX_FILE_SIZE:
+        print(json.dumps({{"success": False, "error": "File troppo grande per replace_block ({{}} > {{}})".format(file_size, MAX_FILE_SIZE), "code": "file_too_large"}}))
+        exit(0)
+
     with open(path, 'r', encoding='utf-8') as f:
         content = f.read()
 

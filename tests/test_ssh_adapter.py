@@ -175,3 +175,134 @@ def test_tmux_send_input(monkeypatch, host: Host):
     res7 = tmux_send_input(host, "sess", "a\nb", cfg, enter=True, settle_delay=0.25)
     assert res7.ok
     assert "sleep 0.25" in captured_cmds[-1]
+
+
+# ── Test Nuove Funzionalità: Errori Semantici, Retry, Rate Limiting ─────────
+
+
+def test_ssh_error_classification():
+    from bravoric_ssh_client.ssh.adapter import ErrorCategory, SshError
+
+    p_perm = FakeCompleted(255, "", "Permission denied (publickey).")
+    err_perm = SshError.from_subprocess(p_perm, "host1")
+    assert err_perm.category == ErrorCategory.PERMISSION_DENIED
+    assert err_perm.recoverable is False
+    assert err_perm.code == "permission_denied"
+
+    p_auth = FakeCompleted(255, "", "Authentication failed.")
+    err_auth = SshError.from_subprocess(p_auth, "host1")
+    assert err_auth.category == ErrorCategory.AUTH_FAILED
+    assert err_auth.recoverable is True
+
+    p_unreach = FakeCompleted(255, "", "ssh: connect to host 1.2.3.4 port 22: No route to host")
+    err_unreach = SshError.from_subprocess(p_unreach, "host1")
+    assert err_unreach.category == ErrorCategory.HOST_UNREACHABLE
+    assert err_unreach.recoverable is True
+
+    p_reset = FakeCompleted(255, "", "Connection reset by peer")
+    err_reset = SshError.from_subprocess(p_reset, "host1")
+    assert err_reset.category == ErrorCategory.CONNECTION_RESET
+    assert err_reset.recoverable is True
+
+    p_timeout = FakeCompleted(255, "", "Connection timed out")
+    err_timeout = SshError.from_subprocess(p_timeout, "host1")
+    assert err_timeout.category == ErrorCategory.TIMEOUT
+    assert err_timeout.recoverable is True
+
+    p_cmd = FakeCompleted(127, "", "bash: mycustomcmd: command not found")
+    err_cmd = SshError.from_subprocess(p_cmd, "host1")
+    assert err_cmd.category == ErrorCategory.COMMAND_NOT_FOUND
+    assert err_cmd.recoverable is False
+
+
+def test_is_transient_error():
+    from bravoric_ssh_client.ssh.adapter import _is_transient_error
+
+    assert _is_transient_error(FakeCompleted(255, "", "Connection timed out")) is True
+    assert _is_transient_error(FakeCompleted(255, "", "Connection reset by peer")) is True
+    assert _is_transient_error(FakeCompleted(255, "", "Broken pipe")) is True
+    assert _is_transient_error(FakeCompleted(255, "", "No route to host")) is True
+    assert _is_transient_error(FakeCompleted(255, "", "Network is unreachable")) is True
+    assert _is_transient_error(FakeCompleted(255, "", "Permission denied (publickey)")) is False
+    assert _is_transient_error(FakeCompleted(0, "success", "")) is False
+
+
+def test_retry_on_transient_error(monkeypatch, host: Host):
+    import time
+
+    from bravoric_ssh_client.ssh.adapter import run_remote_command
+
+    attempts = 0
+
+    def fake_run(args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            return FakeCompleted(255, "", "Connection timed out")
+        return FakeCompleted(0, "success\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+
+    cfg = SshConfig()
+    res = run_remote_command(host, "echo hi", cfg, batch=True, max_retries=3)
+    assert res.returncode == 0
+    assert res.stdout == "success\n"
+    assert attempts == 3
+
+
+def test_no_retry_when_max_retries_zero(monkeypatch, host: Host):
+    import time
+
+    from bravoric_ssh_client.ssh.adapter import run_remote_command
+
+    attempts = 0
+
+    def fake_run(args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        return FakeCompleted(255, "", "Connection timed out")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+
+    cfg = SshConfig()
+    res = run_remote_command(host, "echo hi", cfg, batch=True, max_retries=0)
+    assert res.returncode == 255
+    assert attempts == 1
+
+
+def test_auth_rate_limiting():
+    from bravoric_ssh_client.ssh.adapter import (
+        MAX_AUTH_FAILURES,
+        _auth_failures,
+        _is_auth_locked,
+        _record_auth_failure,
+        _reset_auth_failures,
+    )
+
+    _auth_failures.clear()
+    alias = "test-host-lockout"
+
+    # Initially not locked
+    locked, rem = _is_auth_locked(alias)
+    assert not locked
+    assert rem == 0
+
+    # Record failures below threshold
+    for _ in range(MAX_AUTH_FAILURES - 1):
+        _record_auth_failure(alias)
+    locked, _ = _is_auth_locked(alias)
+    assert not locked
+
+    # Reach threshold
+    _record_auth_failure(alias)
+    locked, rem = _is_auth_locked(alias)
+    assert locked
+    assert rem > 0
+
+    # Reset
+    _reset_auth_failures(alias)
+    locked, rem = _is_auth_locked(alias)
+    assert not locked
+    assert rem == 0

@@ -8,6 +8,7 @@ from bravoric_ssh_client.ssh.inspection import (
     remote_git_status,
     remote_host_health,
     remote_read_file,
+    remote_replace_block,
     remote_search_files,
 )
 
@@ -91,3 +92,27 @@ def test_mcp_server_registers_new_tools(tmp_path: Path):
     mcp = BravoricMcp(config=cfg)
     for name in ["search_files", "read_file", "git_status", "host_health"]:
         assert hasattr(mcp, name)
+
+
+# ── Test Nuove Funzionalità: Chunked File Operations ────────────────
+
+
+def test_remote_read_file_too_large(tmp_path: Path):
+    """remote_read_file rifiuta file > MAX_FILE_SIZE con code='file_too_large'."""
+    host = Host(alias="loc", host="localhost", local=True)
+    big = tmp_path / "huge.bin"
+    big.write_bytes(b"x" * (11 * 1024 * 1024))  # 11 MB > 10 MB
+    res = remote_read_file(host, None, path=str(big))
+    assert res["ok"] is False
+    assert res.get("code") == "file_too_large"
+    assert "File troppo grande" in res.get("error", "")
+
+
+def test_remote_replace_block_too_large(tmp_path: Path):
+    """remote_replace_block rifiuta file > MAX_FILE_SIZE con code='file_too_large'."""
+    host = Host(alias="loc", host="localhost", local=True)
+    big = tmp_path / "huge.bin"
+    big.write_bytes(b"x" * (11 * 1024 * 1024))  # 11 MB > 10 MB
+    res = remote_replace_block(host, None, path=str(big), old_text="old", new_text="new")
+    assert res["ok"] is False
+    assert res.get("code") == "file_too_large"

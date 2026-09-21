@@ -100,6 +100,8 @@ class Host:
     cycle_interval: int = 120  # secondi di inattività prima di ruotare
     jump_host: str | None = None  # alias del bastion/ProxyJump per raggiungere l'host
     tunnels: list[Tunnel] = field(default_factory=list)  # port forwarding attivi da TUI
+    connect_timeout: int | None = None  # timeout connessione per-host (secondi)
+    strict_host_key_checking: str = "accept-new"  # "accept-new" | "yes" | "no" | "off"
     extra: dict[str, Any] = field(default_factory=dict)
 
     def effective_user(self) -> str:
@@ -130,7 +132,11 @@ class Config:
     path: Path | None = None
     restart_after_ssh: bool = False  # riapre la TUI dopo un attach/shell
     history_size: int = 10  # quante sessioni recenti tenere in cronologia
-    audit_log: bool = False  # registra I/O interattivo (script/pipe-pane) in log gz
+    audit_log: bool = (
+        True  # registra I/O interattivo (script/pipe-pane) in log gz (default: attivo)
+    )
+    strict_host_key_checking: str = "accept-new"  # "accept-new" | "yes" | "no" | "off"
+    connect_timeout: int | None = None  # timeout connessione default (secondi)
     snippets_file: str | None = None  # percorso del catalogo snippet (JSON)
     tunnels_file: str | None = (
         None  # percorso dello stato dei tunnel (JSON, default config_dir/tunnels.json)
@@ -220,6 +226,13 @@ def _parse_host(alias: str, raw: dict[str, Any], defaults: dict[str, Any]) -> Ho
             _as_bool(defaults.get("auto_cycle")) if defaults.get("auto_cycle") is not None else None
         ),
         cycle_interval=int(raw.get("cycle_interval") or defaults.get("cycle_interval") or 120),
+        connect_timeout=int(raw.get("connect_timeout") or defaults.get("connect_timeout") or 0)
+        or None,
+        strict_host_key_checking=str(
+            raw.get("strict_host_key_checking")
+            or defaults.get("strict_host_key_checking")
+            or "accept-new"
+        ),
         jump_host=str(raw["jump_host"])
         if raw.get("jump_host")
         else (str(defaults["jump_host"]) if defaults.get("jump_host") else None),
@@ -266,6 +279,7 @@ def load_config(path: Path | None = None) -> Config:
         restart_after_ssh=_as_bool(general.get("restart_after_ssh")),
         history_size=int(general.get("history_size") or 10),
         audit_log=_as_bool(general.get("audit_log")),
+        strict_host_key_checking=str(general.get("strict_host_key_checking") or "accept-new"),
         snippets_file=str(general["snippets_file"]) if general.get("snippets_file") else None,
         tunnels_file=str(general["tunnels_file"]) if general.get("tunnels_file") else None,
     )
@@ -324,6 +338,8 @@ def serialize_config(cfg: Config) -> str:
     lines.append(f"restart_after_ssh = {_toml_value(cfg.restart_after_ssh)}")
     lines.append(f"history_size = {int(cfg.history_size)}")
     lines.append(f"audit_log = {_toml_value(cfg.audit_log)}")
+    if cfg.strict_host_key_checking and cfg.strict_host_key_checking != "accept-new":
+        lines.append(f"strict_host_key_checking = {_toml_str(cfg.strict_host_key_checking)}")
     if cfg.snippets_file:
         lines.append(f"snippets_file = {_toml_str(cfg.snippets_file)}")
     if cfg.tunnels_file:
@@ -352,6 +368,10 @@ def serialize_config(cfg: Config) -> str:
             lines.append(f"cycle_interval = {int(h.cycle_interval)}")
         if h.jump_host:
             lines.append(f"jump_host = {_toml_str(h.jump_host)}")
+        if h.connect_timeout is not None:
+            lines.append(f"connect_timeout = {int(h.connect_timeout)}")
+        if h.strict_host_key_checking and h.strict_host_key_checking != "accept-new":
+            lines.append(f"strict_host_key_checking = {_toml_str(h.strict_host_key_checking)}")
         for t in h.tunnels:
             lines.append("[[hosts.tunnels]]")
             if t.name:

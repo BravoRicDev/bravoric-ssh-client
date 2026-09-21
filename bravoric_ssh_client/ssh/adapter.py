@@ -9,14 +9,156 @@ Se l'host usa chiave/agent, si procede con ``BatchMode=yes`` senza password.
 
 from __future__ import annotations
 
+import enum
+import logging
 import os
 import subprocess
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..config import Host
 from .shellutil import sh_quote, write_askpass_helper, write_askpass_helper_single
+
+logger = logging.getLogger("bravoric.ssh")
+
+
+DEFAULT_MAX_RETRIES = 3
+DEFAULT_RETRY_BASE_DELAY = 1.0
+DEFAULT_RETRY_MAX_DELAY = 30.0
+
+MAX_AUTH_FAILURES = 5
+AUTH_LOCKOUT_SECONDS = 300
+
+CONTROLMASTER_PATH = "~/.ssh/bravoric-socket-%r@%h-%p"
+SERVER_ALIVE_INTERVAL = "30"
+SERVER_ALIVE_COUNT_MAX = "3"
+
+
+class ErrorCategory(str, enum.Enum):
+    AUTH_FAILED = "auth_failed"
+    HOST_UNREACHABLE = "host_unreachable"
+    TIMEOUT = "timeout"
+    COMMAND_NOT_FOUND = "command_not_found"
+    CONNECTION_RESET = "connection_reset"
+    PERMISSION_DENIED = "permission_denied"
+    FILE_TOO_LARGE = "file_too_large"
+    CONFIG = "config"
+    UNKNOWN = "unknown"
+
+
+class SshError(Exception):
+    def __init__(
+        self,
+        message: str,
+        code: str,
+        category: ErrorCategory,
+        recoverable: bool = False,
+        detail: str = "",
+        cause: Exception | None = None,
+    ):
+        super().__init__(message)
+        self.code = code
+        self.category = category
+        self.recoverable = recoverable
+        self.detail = detail
+        self.cause = cause
+
+    @staticmethod
+    def from_subprocess(proc: subprocess.CompletedProcess[str], context: str = "") -> SshError:
+        stderr = (proc.stderr or "").lower()
+        stdout = (proc.stdout or "").lower()
+        combined = stderr + " " + stdout
+
+        if "permission denied" in combined or "keyboard-interactive" in combined:
+            return SshError(
+                f"Permesso negato su {context}",
+                code="permission_denied",
+                category=ErrorCategory.PERMISSION_DENIED,
+                recoverable=False,
+                detail=(proc.stderr or "").strip(),
+            )
+        if "authentication failed" in combined or "auth fail" in combined:
+            return SshError(
+                f"Autenticazione fallita su {context}",
+                code="auth_failed",
+                category=ErrorCategory.AUTH_FAILED,
+                recoverable=True,
+                detail=(proc.stderr or "").strip(),
+            )
+        if (
+            "no route to host" in combined
+            or "could not resolve" in combined
+            or "name or service not known" in combined
+            or "network is unreachable" in combined
+        ):
+            return SshError(
+                f"Host non raggiungibile: {context}",
+                code="host_unreachable",
+                category=ErrorCategory.HOST_UNREACHABLE,
+                recoverable=True,
+                detail=(proc.stderr or "").strip(),
+            )
+        if "connection reset" in combined or "broken pipe" in combined:
+            return SshError(
+                f"Connessione interrotta su {context}",
+                code="connection_reset",
+                category=ErrorCategory.CONNECTION_RESET,
+                recoverable=True,
+                detail=(proc.stderr or "").strip(),
+            )
+        if "timed out" in combined or "timeout" in combined:
+            return SshError(
+                f"Timeout connessione su {context}",
+                code="timeout",
+                category=ErrorCategory.TIMEOUT,
+                recoverable=True,
+                detail=(proc.stderr or "").strip(),
+            )
+        if "command not found" in combined or "not found" in combined:
+            return SshError(
+                f"Comando non trovato su {context}",
+                code="command_not_found",
+                category=ErrorCategory.COMMAND_NOT_FOUND,
+                recoverable=False,
+                detail=(proc.stderr or "").strip(),
+            )
+        return SshError(
+            f"Errore generico su {context}",
+            code="unknown",
+            category=ErrorCategory.UNKNOWN,
+            recoverable=False,
+            detail=(proc.stderr or "").strip(),
+        )
+
+
+_auth_failures: dict[str, list[float]] = {}
+
+
+def _record_auth_failure(host_alias: str) -> None:
+    now = time.time()
+    if host_alias not in _auth_failures:
+        _auth_failures[host_alias] = []
+    _auth_failures[host_alias].append(now)
+    cutoff = now - 600
+    _auth_failures[host_alias] = [t for t in _auth_failures[host_alias] if t > cutoff]
+
+
+def _is_auth_locked(host_alias: str) -> tuple[bool, int]:
+    now = time.time()
+    failures = _auth_failures.get(host_alias, [])
+    recent = [t for t in failures if now - t < AUTH_LOCKOUT_SECONDS]
+    if len(recent) >= MAX_AUTH_FAILURES:
+        oldest = min(recent)
+        remaining = int(AUTH_LOCKOUT_SECONDS - (now - oldest))
+        return True, max(0, remaining)
+    return False, 0
+
+
+def _reset_auth_failures(host_alias: str) -> None:
+    _auth_failures.pop(host_alias, None)
+
 
 DEFAULT_CONNECT_TIMEOUT = "4"
 
@@ -77,6 +219,7 @@ class SshConfig:
     connect_timeout: str = DEFAULT_CONNECT_TIMEOUT
     ssh_bin: str | None = None  # override per i test
     jump_resolver: Callable[[Host], Host | None] | None = None  # alias -> Host bastion
+    use_controlmaster: bool = True
 
 
 def _find_ssh(cfg: SshConfig | None) -> str:
@@ -123,16 +266,44 @@ def _ssh_jump_args(host: Host, cfg: SshConfig) -> list[str]:
     return ["-J", target]
 
 
+def _expand_control_path(host: Host) -> str:
+    path = os.path.expanduser(CONTROLMASTER_PATH)
+    # Assicurati che la directory ~/.ssh esista
+    os.makedirs(os.path.expanduser("~/.ssh"), exist_ok=True)
+    return path
+
+
 def _ssh_base_args(host: Host, cfg: SshConfig, *, batch: bool) -> list[str]:
     args = []
     if batch:
         args += ["-o", "BatchMode=yes"]
+
+    # Connect timeout per-host o globale
+    timeout = getattr(host, "connect_timeout", None) or cfg.connect_timeout
+    if timeout is not None:
+        args += ["-o", f"ConnectTimeout={timeout}"]
+    else:
+        args += ["-o", f"ConnectTimeout={DEFAULT_CONNECT_TIMEOUT}"]
+
     args += [
         "-o",
-        "ConnectTimeout=" + cfg.connect_timeout,
-        "-o",
         "StrictHostKeyChecking=accept-new",
+        "-o",
+        f"ServerAliveInterval={SERVER_ALIVE_INTERVAL}",
+        "-o",
+        f"ServerAliveCountMax={SERVER_ALIVE_COUNT_MAX}",
     ]
+
+    if cfg.use_controlmaster and not host.is_local():
+        args += [
+            "-o",
+            "ControlMaster=auto",
+            "-o",
+            f"ControlPath={_expand_control_path(host)}",
+            "-o",
+            "ControlPersist=10m",
+        ]
+
     if host.port and host.port != 22:
         args += ["-p", str(host.port)]
     args += _ssh_jump_args(host, cfg)
@@ -155,6 +326,76 @@ def _password_mapping(host: Host, cfg: SshConfig) -> dict[str, str]:
     return mapping
 
 
+def _is_transient_error(proc: subprocess.CompletedProcess[str]) -> bool:
+    stderr = (proc.stderr or "").lower()
+    stdout = (proc.stdout or "").lower()
+    combined = stderr + " " + stdout
+    return any(
+        kw in combined
+        for kw in [
+            "timed out",
+            "timeout",
+            "connection reset",
+            "broken pipe",
+            "connection refused",
+            "no route to host",
+            "network is unreachable",
+            "host key verification failed",
+        ]
+    )
+
+
+def _classify_ssh_error(
+    proc: subprocess.CompletedProcess[str], host_alias: str, command: str
+) -> SshError:
+    stderr = (proc.stderr or "").lower()
+    stdout = (proc.stdout or "").lower()
+    combined = stderr + " " + stdout
+    if "permission denied" in combined or "keyboard-interactive" in combined:
+        return SshError(
+            f"Autenticazione fallita su {host_alias}",
+            code="auth_failed",
+            category=ErrorCategory.AUTH_FAILED,
+            detail=(proc.stderr or "").strip(),
+        )
+    if "timed out" in combined or "timeout" in combined:
+        return SshError(
+            f"Timeout connessione su {host_alias}",
+            code="timeout",
+            category=ErrorCategory.TIMEOUT,
+            recoverable=True,
+            detail=(proc.stderr or "").strip(),
+        )
+    if "could not resolve" in combined or "name or service not known" in combined:
+        return SshError(
+            f"Host non raggiungibile: {host_alias}",
+            code="host_unreachable",
+            category=ErrorCategory.HOST_UNREACHABLE,
+            detail=(proc.stderr or "").strip(),
+        )
+    if "connection reset" in combined or "broken pipe" in combined:
+        return SshError(
+            f"Connessione interrotta su {host_alias}",
+            code="connection_reset",
+            category=ErrorCategory.CONNECTION_RESET,
+            recoverable=True,
+            detail=(proc.stderr or "").strip(),
+        )
+    if "command not found" in combined or "not found" in combined:
+        return SshError(
+            f"Comando non trovato su {host_alias}: {command}",
+            code="command_not_found",
+            category=ErrorCategory.COMMAND_NOT_FOUND,
+            detail=(proc.stderr or "").strip(),
+        )
+    return SshError(
+        f"Errore SSH generico su {host_alias}: exit {proc.returncode}",
+        code="unknown",
+        category=ErrorCategory.UNKNOWN,
+        detail=(proc.stderr or "").strip(),
+    )
+
+
 def run_remote_command(
     host: Host,
     command: str,
@@ -163,23 +404,104 @@ def run_remote_command(
     batch: bool = False,
     with_password: bool = False,
     timeout: int = 15,
+    max_retries: int = DEFAULT_MAX_RETRIES,
+    stream_callback: Callable[[str], None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Esegue ``command`` sul server.
 
     - ``batch``: rifiuta prompt interattivi (utile per capire se serve password).
     - ``with_password``: fornisce le password via SSH_ASKPASS helper (multi-host
       per il caso bastion + host finale).
+    - ``max_retries``: retry per errori transienti (default 3, 0 = nessun retry).
+    - ``stream_callback``: callback opzionale per ricevere l'output in tempo reale.
     """
     cfg = cfg or SshConfig()
+
+    # Rate limiting autenticazione
+    locked, remaining = _is_auth_locked(host.alias)
+    if locked:
+        raise SshError(
+            f"Host {host.alias} temporaneamente bloccato per troppi fallimenti autenticazione. Riprova tra {remaining}s.",
+            code="auth_locked",
+            category=ErrorCategory.AUTH_FAILED,
+            detail=f"Lockout attivo per {remaining} secondi.",
+        )
+
     ssh = _find_ssh(cfg)
     args = [ssh, *_ssh_base_args(host, cfg, batch=batch), command]
     env = dict(os.environ)
+
+    def _run_with_retry(env_dict: dict[str, str]) -> subprocess.CompletedProcess[str]:
+        proc = None
+        for attempt in range(max_retries + 1):
+            try:
+                if stream_callback:
+                    # Streaming output con subprocess.Popen
+                    p = subprocess.Popen(
+                        args,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        env=env_dict,
+                    )
+                    stdout_lines = []
+                    while True:
+                        line = p.stdout.readline()
+                        if not line:
+                            break
+                        stdout_lines.append(line)
+                        stream_callback(line)
+                    p.wait(timeout=timeout)
+                    stderr = p.stderr.read()
+                    proc = subprocess.CompletedProcess(
+                        args, p.returncode, "".join(stdout_lines), stderr
+                    )
+                else:
+                    proc = subprocess.run(
+                        args, capture_output=True, text=True, timeout=timeout, env=env_dict
+                    )
+
+                if proc.returncode == 0:
+                    _reset_auth_failures(host.alias)
+                    return proc
+
+                if not _is_transient_error(proc):
+                    break
+            except subprocess.TimeoutExpired as e:
+                if attempt == max_retries:
+                    raise SshError(
+                        f"Timeout connessione su {host.alias}",
+                        code="timeout",
+                        category=ErrorCategory.TIMEOUT,
+                        recoverable=True,
+                        cause=e,
+                    ) from e
+            except Exception as e:
+                if attempt == max_retries:
+                    raise SshError(
+                        f"Errore di connessione su {host.alias}: {e}",
+                        code="connection_failed",
+                        category=ErrorCategory.HOST_UNREACHABLE,
+                        cause=e,
+                    ) from e
+
+            # Exponential backoff
+            delay = min(DEFAULT_RETRY_BASE_DELAY * (2**attempt), DEFAULT_RETRY_MAX_DELAY)
+            logger.warning(
+                "ssh retry attempt=%d host=%s delay=%.2f", attempt + 1, host.alias, delay
+            )
+            time.sleep(delay)
+
+        if proc and proc.returncode != 0:
+            err = SshError.from_subprocess(proc, host.alias)
+            if err.category in (ErrorCategory.AUTH_FAILED, ErrorCategory.PERMISSION_DENIED):
+                _record_auth_failure(host.alias)
+        return proc or subprocess.CompletedProcess(args, -1, "", "Errore sconosciuto")
+
     if with_password:
         mapping = _password_mapping(host, cfg)
         if not mapping:
             raise ValueError("with_password=True ma nessuna password dal provider")
-        # Caso semplice (un solo host, nessun bastion): helper a password singola,
-        # comportamento storico con BRAVORIC_PASSWORD in env.
         has_jump = bool(host.jump_host and cfg.jump_resolver and cfg.jump_resolver(host))
         if not has_jump:
             password = next(iter(mapping.values()))
@@ -189,21 +511,18 @@ def run_remote_command(
                 env["SSH_ASKPASS_REQUIRE"] = "force"
                 env.setdefault("DISPLAY", ":0")
                 env["BRAVORIC_PASSWORD"] = password
-                return subprocess.run(
-                    args, capture_output=True, text=True, timeout=timeout, env=env
-                )
+                return _run_with_retry(env)
             finally:
                 helper.unlink(missing_ok=True)
-        # Caso bastion: helper multi-host (una password per host, match sul prompt).
         helper = write_askpass_helper(mapping)
         try:
             env["SSH_ASKPASS"] = str(helper)
             env["SSH_ASKPASS_REQUIRE"] = "force"
             env.setdefault("DISPLAY", ":0")
-            return subprocess.run(args, capture_output=True, text=True, timeout=timeout, env=env)
+            return _run_with_retry(env)
         finally:
             helper.unlink(missing_ok=True)
-    return subprocess.run(args, capture_output=True, text=True, timeout=timeout, env=env)
+    return _run_with_retry(env)
 
 
 def list_tmux_sessions(host: Host, cfg: SshConfig | None = None) -> ListSessionsResult:

@@ -14,8 +14,44 @@ interattivo non è esposto perché non è compatibile con il trasporto stdio.
 from __future__ import annotations
 
 import json
+import logging
+import time
+import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+
+# Logger strutturato MCP
+mcp_logger = logging.getLogger("bravoric_ssh_client.mcp")
+
+
+def _setup_logging():
+    """Configura un handler JSON-like per il logger MCP."""
+    if mcp_logger.handlers:
+        return
+    mcp_logger.setLevel(logging.INFO)
+    handler = logging.StreamHandler()
+
+    class JsonFormatter(logging.Formatter):
+        def format(self, record):
+            log_data = {
+                "timestamp": self.formatTime(record, self.datefmt),
+                "level": record.levelname,
+                "message": record.getMessage(),
+            }
+            if hasattr(record, "correlation_id"):
+                log_data["correlation_id"] = record.correlation_id
+            if hasattr(record, "tool"):
+                log_data["tool"] = record.tool
+            if hasattr(record, "host"):
+                log_data["host"] = record.host
+            return json.dumps(log_data, ensure_ascii=False)
+
+    handler.setFormatter(JsonFormatter())
+    mcp_logger.addHandler(handler)
+
+
+_setup_logging()
 
 from . import __version__
 from .config import Config, Host, Tunnel, default_config_path, load_config
@@ -146,6 +182,8 @@ class BravoricMcp:
         self.config = config
         self.tunnels = TunnelManager()
         self.pane_diffs = PaneDiffTracker()
+        self._current_correlation_id: str | None = None
+        self._metrics = {"tool_calls": 0, "errors": 0, "total_duration_ms": 0}
         self.server = MCPServer(
             "bravoric-ssh",
             title="bravoric-ssh-client",
@@ -155,6 +193,37 @@ class BravoricMcp:
             ),
         )
         self._register()
+
+    @contextmanager
+    def correlation(self, tool_name: str, host_alias: str | None = None):
+        """Context manager per tracciare le chiamate ai tool con correlation ID."""
+        old_id = self._current_correlation_id
+        self._current_correlation_id = old_id or uuid.uuid4().hex
+        start_time = time.time()
+        self._metrics["tool_calls"] += 1
+
+        extra = {"correlation_id": self._current_correlation_id, "tool": tool_name}
+        if host_alias:
+            extra["host"] = host_alias
+
+        mcp_logger.info(f"Inizio esecuzione tool: {tool_name}", extra=extra)
+        try:
+            yield self._current_correlation_id
+        except Exception as e:
+            self._metrics["errors"] += 1
+            mcp_logger.error(f"Errore durante esecuzione tool {tool_name}: {e}", extra=extra)
+            raise
+        finally:
+            duration = (time.time() - start_time) * 1000
+            self._metrics["total_duration_ms"] += duration
+            mcp_logger.info(
+                f"Fine esecuzione tool: {tool_name} (durata: {duration:.2f}ms)", extra=extra
+            )
+            self._current_correlation_id = old_id
+
+    def get_metrics(self) -> str:
+        """Restituisce le metriche operative del server MCP."""
+        return self._dump(self._metrics)
 
     # ---------- stato / helper ----------
 
@@ -1469,6 +1538,29 @@ class BravoricMcp:
     def remove_snippet(self, name: str) -> str:
         remove_snippet(self._load_config(), name)
         return f"snippet '{name}' rimosso"
+
+    def get_health_summary(self) -> str:
+        """Panoramica di tutti gli host con warning count."""
+        cfg = self._load_config()
+        summary = []
+        for h in cfg.hosts:
+            try:
+                health = self.host_health(h.alias)
+                data = json.loads(health)
+                warnings = data.get("warnings", [])
+                summary.append(
+                    {
+                        "alias": h.alias,
+                        "reachable": data.get("reachable", False),
+                        "warnings": warnings,
+                        "warning_count": len(warnings),
+                    }
+                )
+            except Exception as e:
+                summary.append(
+                    {"alias": h.alias, "reachable": False, "error": str(e), "warning_count": 0}
+                )
+        return self._dump({"ok": True, "hosts": summary, "total_hosts": len(summary)})
 
     def broadcast(
         self,

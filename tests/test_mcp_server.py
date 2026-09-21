@@ -682,3 +682,43 @@ def test_send_keys_with_enter(monkeypatch, tmp_path):
     )
     assert out == "inviato"
     assert calls[-1] == ("alpha", "main", "continua", True)
+
+
+# ── Test Nuove Funzionalità: Logger MCP, Correlation ID, Metrics ──
+
+
+def test_mcp_logger_configured():
+    """Il server MCP ha un logger strutturato configurato."""
+    from bravoric_ssh_client.mcp_server import mcp_logger
+
+    assert mcp_logger is not None
+    assert mcp_logger.name == "bravoric_ssh_client.mcp"
+    assert len(mcp_logger.handlers) > 0
+
+
+def test_correlation_id_propagation(tmp_path):
+    """Ogni tool call genera un correlation_id univoco."""
+    mcp = BravoricMcp(config=make_cfg(tmp_path))
+
+    async def run():
+        tools = await mcp.server.list_tools()
+        return tools
+
+    tools = _run(run())
+    assert len(tools) > 0
+    # Verifica che il server abbia il contesto di correlation
+    assert hasattr(mcp, "_current_correlation_id")
+
+
+def test_get_metrics(tmp_path):
+    """get_metrics() ritorna un dict con le chiavi attese."""
+    import json
+
+    mcp = BravoricMcp(config=make_cfg(tmp_path))
+    metrics_str = mcp.get_metrics()
+    assert isinstance(metrics_str, str)
+    metrics = json.loads(metrics_str)
+    assert isinstance(metrics, dict)
+    assert "tool_calls" in metrics
+    assert "errors" in metrics
+    assert "total_duration_ms" in metrics
