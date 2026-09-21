@@ -864,6 +864,8 @@ class BravoricMcp:
         wait_timeout: int = 25,
         capture_lines: int = 200,
         force: bool = False,
+        prompt: str = "",
+        prompt_settle: float = 2.0,
     ) -> str:
         """Lancia un agente AI in una nuova sessione tmux detached e attende la TUI.
 
@@ -882,6 +884,13 @@ class BravoricMcp:
         - ``wait_timeout``: secondi massimi di attesa del caricamento TUI (5..120).
         - ``capture_lines``: righe di pane incluse nel risultato (10..2000).
         - ``force``: se una sessione omonima esiste, la termina e la ricrea.
+        - ``prompt``: primo prompt da iniettare subito dopo il caricamento della
+          TUI. Il testo viene inviato tramite ``send_input`` (bracketed paste per
+          testi multiriga). **Caldamente consigliato**: in questo modo un solo
+          ``launch_agent`` esegue lancio + primo task in atomica.
+        - ``prompt_settle``: secondi di pausa dopo l'invio del prompt prima della
+          cattura finale (default 2.0). Utile per dare tempo all'agente di
+          iniziare l'elaborazione.
 
         Ritorna JSON: in caso di successo ``ok=true`` con ``captured`` (contenuto
         della pane) e ``pane_command``; in caso di errore ``ok=false`` con
@@ -965,6 +974,7 @@ class BravoricMcp:
 
         title = title or f"{agent_key}-{Path(path).name or 'agent'}"
         name = _slug_title(title, fallback=f"{agent_key}-{int(started)}")
+        extra_args = (extra_args or "").rstrip("\n")
         command = f"{binary} {extra_args}".strip()
 
         # Pre-check (un solo roundtrip): directory e binario esistono sull'host.
@@ -1117,6 +1127,36 @@ class BravoricMcp:
                 if (stable_since is not None and now - stable_since >= _LAUNCH_STABLE_SECONDS) or (
                     now - non_shell_since >= _LAUNCH_SPINNER_FALLBACK
                 ):
+                    # ── Prompt iniziale (opzionale) ──
+                    prompt_text = (prompt or "").rstrip("\n")
+                    if prompt_text:
+                        ps = adapter.tmux_send_input(
+                            host,
+                            name,
+                            prompt_text,
+                            cfg,
+                            enter=True,
+                            mode="auto",
+                            bracketed=True,
+                        )
+                        if not ps.ok:
+                            return result(
+                                False,
+                                "prompt_failed",
+                                name=name,
+                                pane_command=pane_command,
+                                captured=screen,
+                                error=(ps.stderr or "").strip() or "invio prompt fallito",
+                            )
+                        # Attesa elaborazione: attende che l'agente reagisca al prompt.
+                        try:
+                            ps_wait = max(0.5, min(10.0, float(prompt_settle or 2.0)))
+                        except (TypeError, ValueError):
+                            ps_wait = 2.0
+                        time.sleep(ps_wait)
+                        # Ricattura il contenuto della pane post-invio.
+                        post = adapter.tmux_capture_pane(host, name, cfg, lines=capture_lines)
+                        screen = (post.stdout or screen).strip("\n")
                     return result(
                         True,
                         "tui_loaded",
@@ -1124,6 +1164,7 @@ class BravoricMcp:
                         pane_command=pane_command,
                         captured=screen,
                         is_shell=False,
+                        prompt_sent=bool(prompt_text),
                     )
 
             if now >= deadline:
@@ -1310,7 +1351,7 @@ class BravoricMcp:
                 }
             )
 
-        text_str = text or ""
+        text_str = (text or "").rstrip("\n")
         res = adapter.tmux_send_input(
             host,
             session,
