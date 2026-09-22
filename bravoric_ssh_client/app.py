@@ -71,7 +71,7 @@ class BravoricApp(App):
     CSS = """
     Screen { width: 100%; height: 1fr; }
     .box { width: 80%; height: 1fr; border: round $accent; padding: 0 1; }
-    .box-title { text-style: bold; color: $text-muted; width: 80%; content-align: center; }
+    .box-title { text-style: bold; color: $text-muted; width: 80%; }
     .host-info { width: 80%; height: 3; color: $text; content-align: center middle; }
     .list { width: 80%; height: 1fr; }
     .hint { width: 80%; height: 1; color: $text-muted; content-align: center middle; }
