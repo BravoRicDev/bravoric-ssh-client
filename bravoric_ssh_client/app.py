@@ -17,7 +17,7 @@ from pathlib import Path
 from textual import getters
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Grid, Vertical
+from textual.containers import Grid, Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import (
     Button,
@@ -2325,9 +2325,11 @@ class QuickLaunchScreen(BravoricScreen):
     ]
 
     CSS = """
-    QuickLaunchScreen #ql-box { width: 60; height: auto; padding: 1 2; border: round $primary; margin: 4 auto; }
-    QuickLaunchScreen #ql-grid { height: auto; layout: vertical; }
-    QuickLaunchScreen #ql-grid.cols2 { layout: grid; grid-size: 2; }
+    QuickLaunchScreen #ql-outer { margin-top: 4; }
+    QuickLaunchScreen #ql-spacer-l { width: 1fr; }
+    QuickLaunchScreen #ql-spacer-r { width: 1fr; }
+    QuickLaunchScreen #ql-box { width: 60; height: auto; padding: 1 2; border: round $primary; }
+    QuickLaunchScreen #ql-grid { height: auto; }
     QuickLaunchScreen #ql-status { height: 1; color: $text-muted; margin-top: 1; }
     QuickLaunchScreen .ql-btn { margin: 0 0 1 0; }
     QuickLaunchScreen #btn-terminal { margin-top: 1; }
@@ -2341,12 +2343,17 @@ class QuickLaunchScreen(BravoricScreen):
         self._status = Static("Rilevamento agenti...", id="ql-status")
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="ql-box"):
-            yield Label("[b]Lancia agente[/b]", classes="box-title")
-            yield Vertical(id="ql-grid")
-            yield Button("Terminale", id="btn-terminal", variant="default")
-            yield self._status
-            yield Label("Esc: annulla", classes="hint")
+        with Horizontal(id="ql-outer"):
+            yield Static(id="ql-spacer-l")
+            with Vertical(id="ql-box"):
+                yield Label("[b]Lancia agente[/b]", classes="box-title")
+                with Vertical(id="ql-grid"):
+                    for c in self._agents_cfg:
+                        yield Button(c["name"], id=f"btn-agent-{c['name']}", classes="ql-btn", variant="primary")
+                yield Button("Terminale", id="btn-terminal", variant="default")
+                yield self._status
+                yield Label("Esc: annulla", classes="hint")
+            yield Static(id="ql-spacer-r")
 
     def on_mount(self) -> None:
         self.run_worker(self._detect_agents(), exclusive=True, group="detect")
@@ -2375,12 +2382,10 @@ class QuickLaunchScreen(BravoricScreen):
             self._status.update("[yellow]Nessun agente trovato[/]")
             self.query_one("#btn-terminal").focus()
             return
-        # griglia 2 colonne se >2 agenti, altrimenti 1 colonna
-        if len(available) > 2:
-            grid.add_class("cols2")
-        for name in available:
-            await grid.mount(Button(name, id=f"btn-agent-{name}", classes="ql-btn"))
-        # focus al primo agente
+        all_names = [c["name"] for c in self._agents_cfg]
+        for name in all_names:
+            if name not in available:
+                self.query_one(f"#btn-agent-{name}").remove()
         self.query_one(f"#btn-agent-{available[0]}").focus()
         self._status.update(f"Trovati: {', '.join(available)}")
 
@@ -2389,8 +2394,7 @@ class QuickLaunchScreen(BravoricScreen):
         if btn_id == "btn-terminal":
             await self._do_launch(None)
         elif btn_id.startswith("btn-agent-"):
-            agent = btn_id[len("btn-agent-"):]
-            await self._do_launch(agent)
+            await self._do_launch(btn_id[len("btn-agent-"):])
 
     async def _do_launch(self, agent: str | None) -> None:
         import re as _re
