@@ -2328,9 +2328,10 @@ class QuickLaunchScreen(BravoricScreen):
     QuickLaunchScreen #ql-outer { width: 100%; align-horizontal: center; margin-top: 4; }
     QuickLaunchScreen #ql-box { width: 60; height: auto; padding: 1 2; border: round $primary; }
     QuickLaunchScreen #ql-grid { height: auto; }
-    QuickLaunchScreen #ql-status { height: 1; color: $text-muted; margin-top: 1; }
-    QuickLaunchScreen .ql-btn { margin: 0 0 1 0; }
-    QuickLaunchScreen #btn-terminal { margin-top: 1; }
+    QuickLaunchScreen #ql-status { height: 1; color: $text-muted; margin-top: 1; text-align: center; }
+    QuickLaunchScreen .box-title { width: 100%; text-align: center; }
+    QuickLaunchScreen .ql-btn { margin: 0 0 1 0; width: 100%; }
+    QuickLaunchScreen #btn-terminal { margin-top: 1; width: 100%; }
     """
 
     def __init__(self, host: Host, config: Config):
