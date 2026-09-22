@@ -2322,6 +2322,8 @@ class QuickLaunchScreen(BravoricScreen):
 
     BINDINGS = [
         Binding("escape", "cancel", "Annulla"),
+        Binding("up", "focus_previous", "Su", show=False),
+        Binding("down", "focus_next", "Giù", show=False),
     ]
 
     CSS = """
