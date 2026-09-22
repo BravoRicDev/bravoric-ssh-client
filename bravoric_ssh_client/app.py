@@ -73,6 +73,7 @@ class BravoricApp(App):
     .box { width: 80%; height: 1fr; border: round $accent; padding: 0 1; }
     .box-title { text-style: bold; color: $text-muted; }
     SessionScreen { align: center top; }
+    LaunchAgentScreen { align: center top; }
     .host-info { width: 80%; height: 3; color: $text; content-align: center middle; }
     .list { width: 80%; height: 1fr; }
     .hint { width: 80%; height: 1; color: $text-muted; content-align: center middle; }
@@ -579,7 +580,12 @@ class HostScreen(BravoricScreen):
         host = self._config.host("localhost")
         if not host:
             # Fallback se localhost non è presente nella config: crea istanza fittizia
-            host = Host(alias="localhost", host="127.0.0.1", user=os.environ.get("USER", "user"), auth="none")
+            host = Host(
+                alias="localhost",
+                host="127.0.0.1",
+                user=os.environ.get("USER", "user"),
+                auth="none",
+            )
         self.app.push_screen(LaunchAgentScreen(host, self._config))
 
     def action_import_ssh(self) -> None:
