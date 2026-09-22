@@ -2313,6 +2313,7 @@ class LaunchAgentScreen(BravoricScreen):
     ]
 
     CSS = """
+    LaunchAgentScreen #agent-form { overflow-y: auto; }
     LaunchAgentScreen #agent-form Input { margin: 0 0 1 0; }
     LaunchAgentScreen #status-box { height: 3; width: 80%; }
     LaunchAgentScreen #output-box { height: 1fr; width: 80%; }
