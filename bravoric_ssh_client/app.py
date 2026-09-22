@@ -69,11 +69,9 @@ class BravoricApp(App):
     TITLE = "bravoric-ssh-client"
     SUB_TITLE = "client SSH + tmux"
     CSS = """
-    HostScreen { align: center top; }
+    Screen { width: 100%; height: 1fr; }
     .box { width: 80%; height: 1fr; border: round $accent; padding: 0 1; }
-    .box-title { text-style: bold; color: $text-muted; }
-    SessionScreen { align: center top; }
-    LaunchAgentScreen { align: center top; }
+    .box-title { text-style: bold; color: $text-muted; width: 80%; content-align: center; }
     .host-info { width: 80%; height: 3; color: $text; content-align: center middle; }
     .list { width: 80%; height: 1fr; }
     .hint { width: 80%; height: 1; color: $text-muted; content-align: center middle; }
@@ -81,10 +79,14 @@ class BravoricApp(App):
     LoadingScreen Static { width: auto; }
     #filter-input { width: 80%; margin: 0 0 1 0; }
     #form-box, #confirm-box, #pw-box {
-        width: 80%; height: auto; border: round $accent; padding: 0 2;
+        width: 80%; height: 1fr; border: round $accent; padding: 0 2;
+        overflow-y: auto;
     }
     #form-box Input, #pw-box Input { margin: 0 0 1 0; }
-    .suggest-list { height: 6; border: dashed $accent; margin-bottom: 1; }
+    .suggest-list { width: 80%; height: 6; border: dashed $accent; margin-bottom: 1; }
+    HostScreen { align: center top; }
+    SessionScreen { align: center top; }
+    LaunchAgentScreen { align: center top; }
     ObserveScreen { align: center top; }
     .observe-pane {
         width: 100%; height: 1fr;
@@ -111,7 +113,10 @@ class BravoricApp(App):
     }
     .bcast-cell-ok { border: round $success; }
     .bcast-cell-err { border: round $error; }
+    #bcast-mode { width: 80%; content-align: center middle; }
     .tunnel-row { width: 100%; }
+    .box-textarea { width: 100%; height: 1fr; }
+    #send-text { width: 100%; height: 1fr; }
     """
 
     def __init__(
@@ -2309,7 +2314,7 @@ class LaunchAgentScreen(BravoricScreen):
 
     CSS = """
     LaunchAgentScreen #agent-form Input { margin: 0 0 1 0; }
-    LaunchAgentScreen #status-box { height: 3; }
+    LaunchAgentScreen #status-box { height: 3; width: 80%; }
     LaunchAgentScreen #output-box { height: 1fr; width: 80%; }
     """
 
