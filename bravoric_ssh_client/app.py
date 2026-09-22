@@ -20,6 +20,7 @@ from textual.binding import Binding
 from textual.containers import Grid, Vertical
 from textual.screen import Screen
 from textual.widgets import (
+    Button,
     Checkbox,
     Footer,
     Header,
