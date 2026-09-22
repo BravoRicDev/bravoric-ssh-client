@@ -16,9 +16,8 @@ model_arg = "--model"
 
 [[candidates]]
 name = "claude"
-# claude models richiede OAuth attiva sul host; se scade non funziona.
-# Lasciato vuoto: nessun select modello, Claude sceglie da solo.
-model_cmd = ""
+# Legge da ~/.claude/cache/model-catalog/*.json (nessun OAuth richiesto).
+model_cmd = "python3 -c \"import json,os,glob; files=glob.glob(os.path.expanduser('~/.claude/cache/model-catalog/*.json')); models=[]; [models.extend(json.load(open(f)).get('catalog',{}).get('config',{}).get('models',[])) for f in files]; [print(m['id']) for m in models if m.get('id')]\""
 model_arg = "--model"
 
 [[candidates]]
@@ -51,7 +50,8 @@ model_arg = "--model"
 
 [[candidates]]
 name = "codex"
-model_cmd = ""
+# Legge da ~/.codex/models_cache.json (nessun TTY richiesto).
+model_cmd = "python3 -c \"import json,os; f=os.path.expanduser('~/.codex/models_cache.json'); d=json.load(open(f)) if os.path.exists(f) else {}; [print(m.get('slug','') or m.get('id','')) for m in d.get('models',[]) if m.get('slug','') or m.get('id','')]\""
 model_arg = "-m"
 
 [[candidates]]
