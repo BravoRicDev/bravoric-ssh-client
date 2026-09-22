@@ -2316,7 +2316,7 @@ class LaunchAgentScreen(BravoricScreen):
     CSS = """
     LaunchAgentScreen #agent-form { overflow-y: auto; }
     LaunchAgentScreen #agent-form Input { margin: 0 0 1 0; }
-    LaunchAgentScreen #agent-form Input[type="number"] { width: 10ch; }
+    LaunchAgentScreen #timeout { width: 10; }
     LaunchAgentScreen #status-box { height: 1; width: 80%; }
     LaunchAgentScreen #output-box { display: none; }
     LaunchAgentScreen.compact .opt-field { display: none; }
