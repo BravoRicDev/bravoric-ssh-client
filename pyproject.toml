@@ -53,6 +53,9 @@ bravoric-ssh-mcp = "bravoric_ssh_client.mcp_server:main"
 [tool.setuptools.packages.find]
 include = ["bravoric_ssh_client*"]
 
+[tool.setuptools.package-data]
+"bravoric_ssh_client" = ["agents_config.toml"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 

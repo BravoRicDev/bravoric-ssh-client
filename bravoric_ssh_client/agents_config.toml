@@ -1,0 +1,73 @@
+# Agenti AI candidati per LaunchAgentScreen.
+#
+# Campi:
+#   name       - nome del binario (usato anche come comando)
+#   model_cmd  - comando eseguito via SSH per ottenere la lista modelli (uno per riga).
+#                Vuoto = nessun Select modello (l'agente sceglie da solo).
+#   model_arg  - flag da passare all'agente per specificare il modello (es. "--model")
+#
+# L'ordine determina la posizione nel Select. Gli agenti non trovati sul host vengono omessi.
+# Per aggiungere un agente: copia un blocco [[candidates]] e adatta i campi.
+
+[[candidates]]
+name = "opencode"
+model_cmd = "opencode models"
+model_arg = "--model"
+
+[[candidates]]
+name = "claude"
+# claude models richiede OAuth attiva sul host; se scade non funziona.
+# Lasciato vuoto: nessun select modello, Claude sceglie da solo.
+model_cmd = ""
+model_arg = "--model"
+
+[[candidates]]
+name = "hermes"
+# hermes model richiede TTY interattivo; estraiamo i modelli da ~/.hermes/config.yaml
+model_cmd = "python3 -c \"import yaml,os; f=os.path.expanduser('~/.hermes/config.yaml'); cfg=yaml.safe_load(open(f)) if os.path.exists(f) else {}; [print(v.get('default_model','')) for v in cfg.get('providers',{}).values() if v.get('default_model')]\""
+model_arg = "-m"
+
+[[candidates]]
+name = "pi"
+model_cmd = ""
+model_arg = "--model"
+
+[[candidates]]
+name = "agy"
+model_cmd = ""
+model_arg = "--model"
+
+[[candidates]]
+name = "aider"
+model_cmd = ""
+model_arg = "--model"
+
+[[candidates]]
+name = "goose"
+model_cmd = ""
+model_arg = "--model"
+
+[[candidates]]
+name = "codex"
+model_cmd = ""
+model_arg = ""
+
+[[candidates]]
+name = "amp"
+model_cmd = ""
+model_arg = ""
+
+[[candidates]]
+name = "cursor"
+model_cmd = ""
+model_arg = ""
+
+[[candidates]]
+name = "gemini"
+model_cmd = ""
+model_arg = "--model"
+
+[[candidates]]
+name = "gpt"
+model_cmd = ""
+model_arg = ""

@@ -2300,17 +2300,16 @@ class PaneInfoScreen(BravoricScreen):
 
 
 class LaunchAgentScreen(BravoricScreen):
-    """Schermata per lanciare un agente AI (opencode, claude, pi) in tmux detached.
+    """Schermata per lanciare un agente AI in tmux detached.
 
-    Permette di configurare: agente, directory di lavoro, argomenti extra, titolo,
-    prompt iniziale, e opzioni avanzate (force, timeout, capture lines).
-    Il lancio avviene in background e la schermata mostra lo stato di avanzamento.
+    Rileva automaticamente gli agenti installati sull'host e, per quelli che
+    lo supportano, carica la lista modelli disponibili via SSH.
     """
 
     BINDINGS = [
         Binding("escape", "cancel", "Annulla"),
         Binding("ctrl+s", "submit", "Lancia"),
-        Binding("ctrl+r", "refresh", "Refresh"),
+        Binding("ctrl+r", "refresh", "Rileva agenti"),
     ]
 
     CSS = """
@@ -2319,18 +2318,33 @@ class LaunchAgentScreen(BravoricScreen):
     LaunchAgentScreen #timeout { width: 10; }
     LaunchAgentScreen #status-box { height: 1; width: 80%; }
     LaunchAgentScreen #output-box { display: none; }
+    LaunchAgentScreen #model-section { display: none; }
+    LaunchAgentScreen #model-section.visible { display: block; }
+    LaunchAgentScreen #expert-label { color: $warning; text-style: bold; }
     LaunchAgentScreen.compact .opt-field { display: none; }
     LaunchAgentScreen.very-compact .opt-field-2 { display: none; }
     """
-
-    _AGENTS = ["opencode", "claude", "pi"]
 
     def __init__(self, host: Host, config: Config):
         super().__init__()
         self._host = host
         self._config = config
-        self._status_text = Static("Pronto per il lancio", id="status-box", classes="hint")
+        self._status_text = Static("Rilevamento agenti...", id="status-box", classes="hint")
         self._output = Static("", id="output-box")
+        self._agents_cfg: list[dict] = self._load_agents_config()
+        self._current_model_arg: str = ""
+
+    @staticmethod
+    def _load_agents_config() -> list[dict]:
+        import tomllib
+        from pathlib import Path as _Path
+
+        cfg_path = _Path(__file__).parent / "agents_config.toml"
+        try:
+            with open(cfg_path, "rb") as f:
+                return tomllib.load(f).get("candidates", [])
+        except Exception:
+            return []
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -2339,30 +2353,46 @@ class LaunchAgentScreen(BravoricScreen):
             yield Label(f"Host: {self._host.alias}")
             yield Label("Agente:")
             yield Select(
-                [(a, a) for a in self._AGENTS],
-                value=self._AGENTS[0],
+                [("Rilevamento in corso...", "__detecting__")],
+                value="__detecting__",
                 id="agent",
                 allow_blank=False,
             )
             yield Label("Directory di lavoro:")
             yield Input(id="path", placeholder="Lascia vuoto per home")
-            yield Label("Titolo (opzionale):", classes="opt-field")
-            yield Input(id="title", placeholder="nome sessione", classes="opt-field")
-            yield Label("Argomenti extra (opzionale):", classes="opt-field opt-field-2")
-            yield Input(id="extra", placeholder='--model gpt-5, run "prompt"', classes="opt-field opt-field-2")
+            with Vertical(id="model-section"):
+                yield Label("Modello:")
+                yield Select(
+                    [("— agente sceglie —", "")],
+                    value="",
+                    id="model",
+                    allow_blank=False,
+                )
             yield Label("Prompt iniziale (opzionale, multiriga con \\n):")
             yield Input(id="prompt", placeholder="prompt da inviare all'agente")
             yield Label("Timeout attesa (s):")
             yield Input(type="number", value="25", id="timeout", placeholder="5-120")
+            yield Label("Titolo sessione (opzionale):", classes="opt-field")
+            yield Input(id="title", placeholder="lascia vuoto per auto", classes="opt-field")
             yield Label("Force (ricrea se esiste):")
             yield Checkbox(value=False, id="force")
-            yield Label("Ctrl+S: lancia · Ctrl+R: refresh · Esc: annulla", classes="hint")
+            yield Label("─── Expert ───────────────────", id="expert-label", classes="opt-field-2")
+            yield Label(
+                "Argomenti extra (override modello e prompt):",
+                classes="opt-field-2",
+            )
+            yield Input(
+                id="extra",
+                placeholder="--model gpt-5 --flag ...",
+                classes="opt-field-2",
+            )
+            yield Label("Ctrl+S: lancia · Ctrl+R: rileva · Esc: annulla", classes="hint")
         yield self._status_text
         yield Footer()
 
     def on_mount(self) -> None:
         self._apply_compact(self.size.height)
-        self.query_one("#agent", Select).focus()
+        self.run_worker(self._detect_agents(), exclusive=True, group="detect")
 
     def on_resize(self, event) -> None:
         self._apply_compact(event.size.height)
@@ -2377,25 +2407,111 @@ class LaunchAgentScreen(BravoricScreen):
         else:
             self.remove_class("very-compact")
 
+    async def _detect_agents(self) -> None:
+        """SSH: controlla quali agenti candidati sono installati, popola il Select."""
+        cfg = self.app.ssh_cfg
+        q = _sh_quote
+        names = [c["name"] for c in self._agents_cfg]
+        if not names:
+            self._status_text.update("[yellow]Nessun agente configurato in agents_config.toml[/]")
+            return
+
+        check_cmd = (
+            "for _a in "
+            + " ".join(q(n) for n in names)
+            + "; do command -v $_a >/dev/null 2>&1 && echo \"FOUND:$_a\"; done"
+        )
+        result = await _io(ssh_adapter.run_tmux_action, self._host, check_cmd, cfg)
+        found = set()
+        for line in (result.stdout or "").splitlines():
+            if line.startswith("FOUND:"):
+                found.add(line[6:].strip())
+
+        available = [c for c in self._agents_cfg if c["name"] in found]
+        if not available:
+            self._status_text.update("[yellow]Nessun agente trovato sul host[/]")
+            return
+
+        agent_select = self.query_one("#agent", Select)
+        agent_select.set_options([(c["name"], c["name"]) for c in available])
+        agent_select.value = available[0]["name"]
+        agent_select.focus()
+        self._status_text.update(
+            f"Trovati: {', '.join(c['name'] for c in available)}"
+        )
+        await self._load_models(available[0]["name"])
+
+    async def _load_models(self, agent_name: str) -> None:
+        """SSH: carica modelli per l'agente selezionato, aggiorna il Select modello."""
+        cfg = self.app.ssh_cfg
+        model_section = self.query_one("#model-section")
+        model_section.remove_class("visible")
+        self._current_model_arg = ""
+
+        agent_cfg = next((c for c in self._agents_cfg if c["name"] == agent_name), None)
+        if not agent_cfg or not agent_cfg.get("model_cmd", "").strip():
+            return
+
+        self._status_text.update(f"Caricamento modelli per {agent_name}...")
+        result = await _io(
+            ssh_adapter.run_tmux_action, self._host, agent_cfg["model_cmd"], cfg
+        )
+        models = [
+            line.strip()
+            for line in (result.stdout or "").splitlines()
+            if line.strip()
+        ]
+        if not models:
+            self._status_text.update("Pronto per il lancio")
+            return
+
+        self._current_model_arg = agent_cfg.get("model_arg", "")
+        model_select = self.query_one("#model", Select)
+        options = [("— agente sceglie —", "")] + [(m, m) for m in models]
+        model_select.set_options(options)
+        model_select.value = ""
+        model_section.add_class("visible")
+        self._status_text.update(f"Pronto — {len(models)} modelli disponibili")
+
+    async def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "agent" and event.value and event.value != Select.BLANK:
+            await self._load_models(str(event.value))
+
     def action_refresh(self) -> None:
-        self._status_text.update("Refresh...")
-        self._output.update("")
+        self._status_text.update("Rilevamento agenti...")
+        self.query_one("#model-section").remove_class("visible")
+        self.run_worker(self._detect_agents(), exclusive=True, group="detect")
 
     async def action_submit(self) -> None:
-        agent = str(self.query_one("#agent", Select).value or "")
+        agent_val = self.query_one("#agent", Select).value
+        if not agent_val or agent_val == Select.BLANK:
+            self._status_text.update("[red]Seleziona un agente[/]")
+            return
+        agent = str(agent_val)
+
         path = self.query_one("#path", Input).value.strip()
-        # Se vuoto, non forzare la home locale: lascia la directory di default
-        # della sessione tmux (home dell'utente remoto su SSH).
         title = self.query_one("#title", Input).value.strip()
         extra = self.query_one("#extra", Input).value.strip()
         prompt = self.query_one("#prompt", Input).value.strip()
         timeout = int(self.query_one("#timeout", Input).value or 25)
         force = self.query_one("#force", Checkbox).value
 
+        model_val = self.query_one("#model", Select).value
+        model = str(model_val) if (model_val and model_val != Select.BLANK) else ""
+
+        # Costruisci comando: agent [--model MODEL] [extra_args]
+        # extra_args viene DOPO e fa override di tutto
+        cmd_parts = [agent]
+        if model and self._current_model_arg:
+            cmd_parts += [self._current_model_arg, _sh_quote(model)]
+        if extra:
+            cmd_parts.append(extra)
+        agent_cmd = " ".join(cmd_parts)
+
         self._status_text.update("Lancio agente in corso...")
         self._output.update("")
 
-        await self._launch_agent(agent, path, title, extra, prompt, timeout, force)
+        await self._launch_agent(agent_cmd, path, title, "", prompt, timeout, force)
 
     async def _launch_agent(
         self,
@@ -2414,13 +2530,16 @@ class LaunchAgentScreen(BravoricScreen):
         q = _sh_quote
         started = _time.time()
 
+        # agent è il comando completo (es. "opencode --model foo"); il binario è il primo token
+        agent_bin = agent.split()[0] if agent else agent
+
         # Se path vuoto, usa la directory corrente della shell remota (default tmux)
         if path:
             pre = await _io(
                 ssh_adapter.run_tmux_action,
                 self._host,
                 f"bash -lc 'if [ -d {q(path)} ]; then echo PATH_OK; else echo PATH_MISSING; fi ; "
-                f"if command -v {q(agent)} >/dev/null 2>&1; then echo BIN_OK; "
+                f"if command -v {q(agent_bin)} >/dev/null 2>&1; then echo BIN_OK; "
                 f"else echo BIN_MISSING; fi'",
                 cfg,
             )
@@ -2432,27 +2551,27 @@ class LaunchAgentScreen(BravoricScreen):
             pre = await _io(
                 ssh_adapter.run_tmux_action,
                 self._host,
-                f"bash -lc 'if command -v {q(agent)} >/dev/null 2>&1; then echo BIN_OK; else echo BIN_MISSING; fi'",
+                f"bash -lc 'if command -v {q(agent_bin)} >/dev/null 2>&1; then echo BIN_OK; else echo BIN_MISSING; fi'",
                 cfg,
             )
             pre_out = pre.stdout or ""
             if "BIN_MISSING" in pre_out:
                 self._status_text.update(
-                    f"[red]Errore: binario '{agent}' non trovato su {self._host.alias}[/]"
+                    f"[red]Errore: binario '{agent_bin}' non trovato su {self._host.alias}[/]"
                 )
                 return
 
-        # 2. Nome sessione
+        # 2. Nome sessione (usa il nome binario, non il comando completo)
         sess_title = (
-            title or f"{agent}-{Path(path).name or 'agent'}"
+            title or f"{agent_bin}-{Path(path).name or 'agent'}"
             if path
-            else title or f"{agent}-sessione"
+            else title or f"{agent_bin}-sessione"
         )
         # slug sicuro
         import re
 
         slug = re.sub(r"[^A-Za-z0-9_-]+", "-", sess_title.strip())
-        slug = re.sub(r"-{2,}", "-", slug).strip("-_")[:40] or f"{agent}-{_time.time():.0f}"
+        slug = re.sub(r"-{2,}", "-", slug).strip("-_")[:40] or f"{agent_bin}-{_time.time():.0f}"
         win_title = (
             re.sub(r"[\x00-\x1f\x7f]", "", sess_title).replace(":", "-").replace(".", "-")[:50]
         )
@@ -2533,8 +2652,8 @@ class LaunchAgentScreen(BravoricScreen):
                 break
             await _io(_time.sleep, 0.2)
 
-        # 7. Invio comando agente
-        cmd = f"{agent} {extra_args}".strip()
+        # 7. Invio comando agente (agent è già il comando completo con flags modello)
+        cmd = f"{agent} {extra_args}".strip() if extra_args else agent
         self._status_text.update(f"Invio comando: {cmd}")
         send = await _io(
             ssh_adapter.tmux_send_input, self._host, slug, cmd, cfg, enter=True, mode="keys"
