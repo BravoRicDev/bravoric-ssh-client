@@ -2325,8 +2325,7 @@ class QuickLaunchScreen(BravoricScreen):
     ]
 
     CSS = """
-    QuickLaunchScreen { align: center top; }
-    QuickLaunchScreen #ql-box { width: 60; height: auto; padding: 1 2; border: round $primary; margin-top: 4; }
+    QuickLaunchScreen #ql-box { width: 60; height: auto; padding: 1 2; border: round $primary; margin: 4 auto; }
     QuickLaunchScreen #ql-grid { height: auto; layout: vertical; }
     QuickLaunchScreen #ql-grid.cols2 { layout: grid; grid-size: 2; }
     QuickLaunchScreen #ql-status { height: 1; color: $text-muted; margin-top: 1; }
