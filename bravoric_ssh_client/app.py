@@ -125,11 +125,13 @@ class BravoricApp(App):
         config: Config | None = None,
         config_path: Path | None = None,
         start_rotation: str | None = None,
+        launch_agent: bool = False,
     ):
         super().__init__()
         self._config_path = config_path
         self._config = config
         self._start_rotation = start_rotation
+        self._launch_agent = launch_agent
         self.ssh_cfg: SshConfig | None = None
         self.tunnels = TunnelManager()
 
@@ -137,6 +139,13 @@ class BravoricApp(App):
         self._load_config()
         if self._start_rotation:
             self._open_rotation(self._start_rotation)
+        elif self._launch_agent:
+            self.push_host_screen()
+            host = (self._config.host("localhost") if self._config else None) or Host(
+                alias="localhost", host="127.0.0.1",
+                user=os.environ.get("USER", "user"), auth="", local=True,
+            )
+            self.push_screen(LaunchAgentScreen(host, self._config or Config()))
         else:
             self.push_host_screen()
 
@@ -3675,6 +3684,7 @@ def main(argv: list[str] | None = None) -> None:
     rotation_name = None
     sftp_host_a = None
     sftp_host_b = None
+    launch_agent = False
     i = 0
     while i < len(argv):
         if argv[i] in ("-c", "--config") and i + 1 < len(argv):
@@ -3695,8 +3705,12 @@ def main(argv: list[str] | None = None) -> None:
             sftp_host_b = argv[i + 2]
             i += 3
             continue
+        if argv[i] == "--launch-agent":
+            launch_agent = True
+            i += 1
+            continue
         i += 1
-    app = BravoricApp(config_path=config_path, start_rotation=rotation_name)
+    app = BravoricApp(config_path=config_path, start_rotation=rotation_name, launch_agent=launch_agent)
     if sftp_host_a and sftp_host_b:
         # modalità CLI: apre Midnight Commander sui due host (o locale+remoto)
         if app._config is None:
