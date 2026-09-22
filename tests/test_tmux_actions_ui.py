@@ -248,6 +248,7 @@ def test_launch_agent_localhost(monkeypatch):
         cfg = make_config()
         # ensure localhost exists in config
         from bravoric_ssh_client.config import Host
+
         if not any(h.alias == "localhost" for h in cfg.hosts):
             cfg.hosts.insert(
                 0, Host(alias="localhost", host="127.0.0.1", user="alice", auth="none")
@@ -262,10 +263,12 @@ def test_launch_agent_localhost(monkeypatch):
             assert isinstance(app.screen, LaunchAgentScreen)
             # Verify Select widget with agent options
             from textual.widgets import Select
+
             sel = app.screen.query_one(Select)
             assert len(sel._options) == 3
             # Verify path input allows empty (placeholder for home)
             from textual.widgets import Input
+
             path_input = app.screen.query_one("#path", Input)
             assert path_input.placeholder == "Lascia vuoto per home"
             await pilot.pause()
