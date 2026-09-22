@@ -2317,18 +2317,19 @@ class PaneInfoScreen(BravoricScreen):
 
 
 class QuickLaunchScreen(BravoricScreen):
-    """Lancio rapido agente su localhost: solo selezione agente, nessun altro campo."""
+    """Lancio rapido agente su localhost: griglia di bottoni, un bottone per agente."""
 
     BINDINGS = [
         Binding("escape", "cancel", "Annulla"),
-        Binding("ctrl+s", "submit", "Lancia"),
-        Binding("enter", "submit", "Lancia"),
     ]
 
     CSS = """
     QuickLaunchScreen { align: center middle; }
-    QuickLaunchScreen #quick-box { width: 50; height: auto; padding: 1 2; border: round $primary; }
-    QuickLaunchScreen #ql-status { height: 1; color: $text-muted; }
+    QuickLaunchScreen #ql-box { width: 60; height: auto; padding: 1 2; border: round $primary; }
+    QuickLaunchScreen #ql-grid { height: auto; }
+    QuickLaunchScreen #ql-status { height: 1; color: $text-muted; margin-top: 1; }
+    QuickLaunchScreen .ql-btn { width: 1fr; margin: 0 1 1 0; }
+    QuickLaunchScreen #btn-terminal { width: 1fr; margin-top: 1; }
     """
 
     def __init__(self, host: Host, config: Config):
@@ -2339,16 +2340,12 @@ class QuickLaunchScreen(BravoricScreen):
         self._status = Static("Rilevamento agenti...", id="ql-status")
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="quick-box"):
+        with Vertical(id="ql-box"):
             yield Label("[b]Lancia agente[/b]", classes="box-title")
-            yield Select(
-                [("Rilevamento in corso...", "__detecting__")],
-                value="__detecting__",
-                id="ql-agent",
-                allow_blank=False,
-            )
+            yield Vertical(id="ql-grid")
+            yield Button("Terminale", id="btn-terminal", variant="default")
             yield self._status
-            yield Label("Enter / Ctrl+S: lancia · Esc: annulla", classes="hint")
+            yield Label("Esc: annulla", classes="hint")
 
     def on_mount(self) -> None:
         self.run_worker(self._detect_agents(), exclusive=True, group="detect")
@@ -2357,8 +2354,10 @@ class QuickLaunchScreen(BravoricScreen):
         cfg = self.app.ssh_cfg
         q = _sh_quote
         names = [c["name"] for c in self._agents_cfg]
+        grid = self.query_one("#ql-grid")
         if not names:
             self._status.update("[yellow]Nessun agente configurato[/]")
+            self.query_one("#btn-terminal").focus()
             return
         check_cmd = (
             "for _a in "
@@ -2370,27 +2369,38 @@ class QuickLaunchScreen(BravoricScreen):
         for line in (result.stdout or "").splitlines():
             if line.startswith("FOUND:"):
                 found.add(line[6:].strip())
-        available = [c for c in self._agents_cfg if c["name"] in found]
+        available = [c["name"] for c in self._agents_cfg if c["name"] in found]
         if not available:
             self._status.update("[yellow]Nessun agente trovato[/]")
+            self.query_one("#btn-terminal").focus()
             return
-        sel = self.query_one("#ql-agent", Select)
-        sel.set_options([(c["name"], c["name"]) for c in available])
-        sel.value = available[0]["name"]
-        sel.focus()
-        self._status.update(f"{', '.join(c['name'] for c in available)}")
+        # griglia 2 colonne se >2 agenti, altrimenti 1 colonna
+        cols = 2 if len(available) > 2 else 1
+        col_css = " ".join(["1fr"] * cols)
+        grid.styles.grid_size_columns = cols
+        grid.styles.layout = "grid"
+        grid.styles.grid_columns = col_css
+        for name in available:
+            await grid.mount(Button(name, id=f"btn-agent-{name}", classes="ql-btn"))
+        # focus al primo agente
+        self.query_one(f"#btn-agent-{available[0]}").focus()
+        self._status.update(f"Trovati: {', '.join(available)}")
 
-    async def action_submit(self) -> None:
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        btn_id = event.button.id or ""
+        if btn_id == "btn-terminal":
+            await self._do_launch(None)
+        elif btn_id.startswith("btn-agent-"):
+            agent = btn_id[len("btn-agent-"):]
+            await self._do_launch(agent)
+
+    async def _do_launch(self, agent: str | None) -> None:
         import re as _re
-        agent_val = self.query_one("#ql-agent", Select).value
-        if not agent_val or agent_val in (Select.BLANK, "__detecting__"):
-            self._status.update("[red]Seleziona agente[/]")
-            return
-        agent = str(agent_val)
-        self._status.update(f"Lancio {agent}...")
+        label = agent or "terminale"
+        self._status.update(f"Lancio {label}...")
         cfg = self.app.ssh_cfg
         q = _sh_quote
-        base = _re.sub(r"[^A-Za-z0-9_-]+", "-", agent)[:40].strip("-")
+        base = _re.sub(r"[^A-Za-z0-9_-]+", "-", label)[:40].strip("-")
         slug = base
         for i in range(2, 100):
             has = await _io(
@@ -2411,8 +2421,9 @@ class QuickLaunchScreen(BravoricScreen):
         if not res.ok:
             self._status.update(f"[red]{res.stderr.strip() or 'errore sessione'}[/]")
             return
-        await _io(ssh_adapter.tmux_send_input, self._host, slug, agent, cfg, enter=True, mode="keys")
-        self.app.notify(f"'{agent}' in sessione '{slug}'", severity="information")
+        if agent:
+            await _io(ssh_adapter.tmux_send_input, self._host, slug, agent, cfg, enter=True, mode="keys")
+        self.app.notify(f"'{label}' in sessione '{slug}'", severity="information")
         self.app.request_launch(LaunchAction(kind="attach", host=self._host, session=slug))
 
     def action_cancel(self) -> None:
