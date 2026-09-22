@@ -6,6 +6,7 @@ Flusso: lista host -> (Enter) schermata sessioni tmux -> attach/crea/shell.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -18,7 +19,17 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Grid, Vertical
 from textual.screen import Screen
-from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
+from textual.widgets import (
+    Footer,
+    Header,
+    Input,
+    Label,
+    ListItem,
+    ListView,
+    Select,
+    Static,
+    TextArea,
+)
 
 from .config import AUTH_METHODS, Config, Host, backup_config, load_config, save_config
 from .credentials import CredentialError
@@ -289,6 +300,7 @@ class HostScreen(BravoricScreen):
         Binding("R", "rotations", "Rotazioni"),
         Binding("u", "tunnels", "Tunnel"),
         Binding("B", "broadcast", "Broadcast"),
+        Binding("meta+n", "launch_agent_localhost", "Avvia agente su localhost"),
     ]
 
     def __init__(self, config: Config):
@@ -319,7 +331,7 @@ class HostScreen(BravoricScreen):
         yield Label(
             "Enter: apri · a: aggiungi · e: modifica · d: elimina · D: duplica · p: password · t: test · "
             "i: import · g: gruppo · T: ping tutti · R: rotazioni · o: osserva · F: scambio file · "
-            "u: tunnel · B: broadcast · r: ricarica · q: esci",
+            "u: tunnel · B: broadcast · r: ricarica · q: esci · Meta+N: avvia agente su localhost",
             classes="hint",
         )
         yield Footer()
@@ -561,6 +573,14 @@ class HostScreen(BravoricScreen):
 
     def action_broadcast(self) -> None:
         self.app.push_screen(SnippetCatalogScreen(self._config))
+
+    def action_launch_agent_localhost(self) -> None:
+        """Apre direttamente la schermata di lancio agente per localhost."""
+        host = self._config.host("localhost")
+        if not host:
+            # Fallback se localhost non è presente nella config: crea istanza fittizia
+            host = Host(alias="localhost", host="127.0.0.1", user=os.environ.get("USER", "user"), auth="none")
+        self.app.push_screen(LaunchAgentScreen(host, self._config))
 
     def action_import_ssh(self) -> None:
         from .importers import import_from_remmina, import_from_ssh_config
@@ -2302,9 +2322,14 @@ class LaunchAgentScreen(BravoricScreen):
             yield Label("[b]Lancia agente AI[/b]", classes="box-title")
             yield Label(f"Host: {self._host.alias}")
             yield Label("Agente:")
-            yield Input(id="agent", placeholder="opencode / claude / pi", value="opencode")
+            yield Select(
+                [(a, a) for a in self._AGENTS],
+                value=self._AGENTS[0],
+                id="agent",
+                allow_blank=False,
+            )
             yield Label("Directory di lavoro:")
-            yield Input(id="path", placeholder="/percorso/completo")
+            yield Input(id="path", placeholder="Lascia vuoto per home")
             yield Label("Titolo (opzionale):")
             yield Input(id="title", placeholder="nome sessione")
             yield Label("Argomenti extra (opzionale):")
@@ -2321,15 +2346,18 @@ class LaunchAgentScreen(BravoricScreen):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.query_one("#agent", Input).focus()
+        self.query_one("#agent", Select).focus()
 
     def action_refresh(self) -> None:
         self._status_text.update("Refresh...")
         self._output.update("")
 
     async def action_submit(self) -> None:
-        agent = self.query_one("#agent", Input).value.strip()
+        agent = str(self.query_one("#agent", Select).value or "")
         path = self.query_one("#path", Input).value.strip()
+        if not path:
+            # default to home
+            path = str(Path.home())
         title = self.query_one("#title", Input).value.strip()
         extra = self.query_one("#extra", Input).value.strip()
         prompt = self.query_one("#prompt", Input).value.strip()
@@ -2343,9 +2371,6 @@ class LaunchAgentScreen(BravoricScreen):
             self.app.notify(
                 f"Agente non valido. Scegli tra: {', '.join(self._AGENTS)}", severity="error"
             )
-            return
-        if not path:
-            self.app.notify("Inserisci una directory di lavoro", severity="error")
             return
 
         try:
@@ -2557,6 +2582,12 @@ class LaunchAgentScreen(BravoricScreen):
                     self.app.notify(
                         f"Agente '{agent}' lanciato in '{slug}'", severity="information"
                     )
+                    # Esci dalla TUI e apri il terminale con la sessione tmux appena
+                    # creata (con l'agente dentro), esattamente come quando si preme
+                    # Enter su una sessione o si crea con `n` + nome + Ctrl+S.
+                    self.app.request_launch(
+                        LaunchAction(kind="attach", host=self._host, session=slug)
+                    )
                     return
 
             if now >= deadline:
@@ -2593,6 +2624,78 @@ class LaunchAgentScreen(BravoricScreen):
 
     def action_cancel(self) -> None:
         self.app.pop_screen()
+
+
+class SendTextScreen(BravoricScreen):
+    """Schermata per inviare testo libero o codice (multiriga) alla sessione tmux."""
+
+    BINDINGS = [
+        Binding("escape", "app.pop_screen", "Indietro"),
+        Binding("ctrl+s", "send", "Invia (Ctrl+S)"),
+    ]
+
+    def __init__(self, host, session: str) -> None:
+        super().__init__()
+        self._host = host
+        self._session = session
+        self._status_text = ""
+
+    def compose(self):
+        yield Header()
+        with Vertical(id="form-box"):
+            yield Label(
+                f"[b]Invia testo a '{self._session}'[/b]  [dim]{self._host.alias}[/dim]",
+                classes="box-title",
+            )
+            yield Label(
+                "Testo da inviare (multiriga supportato; inviato con bracketed paste):",
+                classes="hint",
+            )
+            yield TextArea(id="send-text")
+            yield Static(self._status_text, id="send-status", classes="hint")
+            yield Label("Ctrl+S: invia · Esc: indietro", classes="hint")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.query_one("#send-text", TextArea).focus()
+
+    def _update_status(self, msg: str, error: bool = False) -> None:
+        self._status_text = msg
+        try:
+            status = self.query_one("#send-status", Static)
+            status.update(f"[red]{msg}[/red]" if error else msg)
+        except Exception:
+            pass
+
+    def action_send(self) -> None:
+        text = self.query_one("#send-text", TextArea).text
+        if not text:
+            self._update_status("Nessun testo da inviare", error=True)
+            return
+        self.run_worker(self._send(text), exclusive=True)
+
+    async def _send(self, content: str) -> None:
+        self._update_status(f"Invio {len(content)} caratteri…")
+        try:
+            res = await _io(
+                ssh_adapter.tmux_send_input,
+                self._host,
+                self._session,
+                content,
+                self.app.ssh_cfg,
+                enter=True,
+                mode="auto",
+                bracketed=True,
+            )
+        except Exception as exc:
+            self._update_status(f"Errore: {exc}", error=True)
+            return
+
+        if res.ok:
+            self.app.notify(f"Testo inviato ({len(content)} char)")
+            self.dismiss()
+        else:
+            self._update_status(f"Errore: {(res.stderr or '').strip() or 'fallito'}", error=True)
 
 
 class SnippetCatalogScreen(BravoricScreen):
@@ -2951,7 +3054,8 @@ class SessionScreen(BravoricScreen):
         yield ListView(id="session-list", classes="list")
         yield Label(
             "Enter: attach · R: attach RO · n: nuova · r: rinomina · k: kill · K: kill server · "
-            "d: dettagli · w: finestre · D: detach · g: aggiorna · s: shell · Esc: indietro",
+            "d: dettagli · i: info pane · a: lancia agente · P: invia testo · F: invia file · "
+            "w: finestre · D: detach · g: aggiorna · s: shell · Esc: indietro",
             classes="hint",
         )
         yield Footer()
@@ -3212,6 +3316,54 @@ class SessionScreen(BravoricScreen):
     def action_launch_agent(self) -> None:
         """Apri la schermata per lanciare un agente AI in una sessione tmux."""
         self.app.push_screen(LaunchAgentScreen(self._host, self._config))
+
+    def action_send_text(self) -> None:
+        """Apre una schermata per inviare testo (anche multiriga) alla pane selezionata."""
+        name = self._selected_session()
+        if not name:
+            self.app.notify("Nessuna sessione selezionata")
+            return
+        self.app.push_screen(SendTextScreen(self._host, name))
+
+    def action_send_file(self) -> None:
+        """Invia il contenuto di un file locale alla pane selezionata (bracketed paste)."""
+        name = self._selected_session()
+        if not name:
+            self.app.notify("Nessuna sessione selezionata")
+            return
+        self.app.push_screen(
+            InputScreen(
+                "Invia file alla pane",
+                "percorso file locale (es. ./patch.diff)",
+                lambda path: self._send_file_to(name, path),
+            )
+        )
+
+    def _send_file_to(self, session: str, path: str) -> None:
+        self.run_worker(self._send_file_async(session, path), thread=False, exclusive=True)
+
+    async def _send_file_async(self, session: str, path: str) -> None:
+        p = Path(path).expanduser()
+        if not p.is_file():
+            self.app.notify(f"File non trovato: {p}", severity="error")
+            return
+        try:
+            content = p.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            self.app.notify(f"Errore lettura file: {exc}", severity="error")
+            return
+        self._update_status(f"Invio {len(content)} caratteri a '{session}'…")
+        try:
+            res = await _io(
+                ssh_adapter.tmux_paste_buffer, self._host, session, content, self.app.ssh_cfg
+            )
+        except Exception as exc:
+            self._update_status(f"Errore: {exc}", error=True)
+            return
+        if res.ok:
+            self.app.notify(f"File inviato ({len(content)} char) a '{session}'")
+        else:
+            self._update_status(f"Errore: {(res.stderr or '').strip() or 'fallito'}", error=True)
 
     def action_new_window(self) -> None:
         name = self._selected_session()

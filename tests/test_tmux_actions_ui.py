@@ -174,3 +174,100 @@ def test_attach_ro_launches(monkeypatch):
             await pilot.pause()
 
     asyncio.run(run())
+
+
+def test_send_text_flow(monkeypatch):
+    """P apre SendTextScreen; Ctrl+S invia il testo via tmux_send_input."""
+    from textual.widgets import TextArea
+
+    from bravoric_ssh_client.app import SendTextScreen
+
+    calls: list = []
+
+    def fake_send_input(host, session, text, cfg=None, **kw):
+        calls.append((session, text, kw))
+        return FakeRes(ok=True)
+
+    monkeypatch.setattr(ssh_adapter, "tmux_send_input", fake_send_input)
+
+    async def run():
+        app = BravoricApp(config=make_config())
+        async with app.run_test(size=(120, 35)) as pilot:
+            await open_sessions(app, pilot)
+            await pilot.press("P")
+            await pilot.pause()
+            assert isinstance(app.screen, SendTextScreen)
+            app.screen.query_one("#send-text", TextArea).text = "echo ciao"
+            await pilot.press("ctrl+s")
+            await pilot.pause(1.0)
+            assert calls, "tmux_send_input non chiamato"
+            session, text, kw = calls[0]
+            assert session == "sess1"
+            assert text == "echo ciao"
+            assert kw.get("enter") is True
+            assert kw.get("mode") == "auto"
+            await pilot.pause()
+
+    asyncio.run(run())
+
+
+def test_send_file_flow(monkeypatch, tmp_path):
+    """F apre InputScreen; inviando un percorso il file viene incollato via tmux_paste_buffer."""
+    calls: list = []
+
+    def fake_paste(host, session, content, cfg=None, **kw):
+        calls.append((session, content))
+        return FakeRes(ok=True)
+
+    monkeypatch.setattr(ssh_adapter, "tmux_paste_buffer", fake_paste)
+
+    p = tmp_path / "patch.diff"
+    p.write_text("--- a\n+++ b\n", encoding="utf-8")
+
+    async def run():
+        app = BravoricApp(config=make_config())
+        async with app.run_test(size=(120, 35)) as pilot:
+            await open_sessions(app, pilot)
+            await pilot.press("F")
+            await pilot.pause()
+            assert isinstance(app.screen, InputScreen)
+            app.screen.query_one("#text-input", Input).value = str(p)
+            await pilot.press("ctrl+s")
+            await pilot.pause(1.0)
+            assert calls == [("sess1", "--- a\n+++ b\n")], calls
+            await pilot.pause()
+
+    asyncio.run(run())
+
+
+def test_launch_agent_localhost(monkeypatch):
+    """Meta+N apre LaunchAgentScreen direttamente da HostScreen (localhost)."""
+    from bravoric_ssh_client.app import LaunchAgentScreen
+
+    async def run():
+        cfg = make_config()
+        # ensure localhost exists in config
+        from bravoric_ssh_client.config import Host
+        if not any(h.alias == "localhost" for h in cfg.hosts):
+            cfg.hosts.insert(
+                0, Host(alias="localhost", host="127.0.0.1", user="alice", auth="none")
+            )
+        app = BravoricApp(config=cfg)
+        async with app.run_test(size=(120, 35)) as pilot:
+            await pilot.pause()
+            assert type(app.screen).__name__ == "HostScreen"
+            # Trigger via action (Meta+N binding is hard to simulate in pilot)
+            app.screen.action_launch_agent_localhost()
+            await pilot.pause()
+            assert isinstance(app.screen, LaunchAgentScreen)
+            # Verify Select widget with agent options
+            from textual.widgets import Select
+            sel = app.screen.query_one(Select)
+            assert len(sel._options) == 3
+            # Verify path input allows empty (placeholder for home)
+            from textual.widgets import Input
+            path_input = app.screen.query_one("#path", Input)
+            assert path_input.placeholder == "Lascia vuoto per home"
+            await pilot.pause()
+
+    asyncio.run(run())
