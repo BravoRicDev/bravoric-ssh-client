@@ -700,8 +700,11 @@ class RecentScreen(BravoricScreen):
         """Riapre tutte le sessioni recenti (senza doppioni) in finestre separate,
         con un piccolo delay tra un terminale e l'altro per evitare sovraccarichi
         su macchine lente o server che applicano rate-limit/ban."""
+        self.run_worker(self._reopen_all_worker(), thread=False)
+
+    async def _reopen_all_worker(self) -> None:
         import shutil
-        import time
+        import asyncio
 
         unique: dict[str, tuple[str, str]] = {}
         for e in self._entries:
@@ -728,7 +731,7 @@ class RecentScreen(BravoricScreen):
                     launched += 1
                     # Piccolo delay per non sovraccaricare macchine lente o server
                     if launched < len(unique):
-                        time.sleep(0.5)
+                        await asyncio.sleep(0.5)
                 except OSError as exc:
                     self.app.notify(f"Errore apertura {host_alias}: {exc}", severity="error")
             else:
@@ -1540,7 +1543,11 @@ class RotationCatalogScreen(BravoricScreen):
     def action_reopen_all(self) -> None:
         """Riapre tutte le sessioni di TUTTE le rotazioni salvate (senza doppioni),
         con un piccolo delay tra un terminale e l'altro."""
-        import time
+        self.run_worker(self._reopen_all_rotations_worker(), thread=False)
+
+    async def _reopen_all_rotations_worker(self) -> None:
+        import shutil
+        import asyncio
 
         unique: dict[str, tuple[str, str]] = {}
         for r in self._rotations:
@@ -1555,6 +1562,8 @@ class RotationCatalogScreen(BravoricScreen):
         launched = 0
         for host_alias, session in unique.values():
             if ptyxis:
+                import subprocess
+
                 try:
                     # ptyxis -x vuole il comando come UNA stringa; eseguita via shell
                     cmd = f"sh -c {_sh_quote(f'exec {_sh_quote(wrap)} --attach {_sh_quote(host_alias)} {_sh_quote(session)}')}"
@@ -1566,7 +1575,7 @@ class RotationCatalogScreen(BravoricScreen):
                     launched += 1
                     # Piccolo delay per non sovraccaricare macchine lente o server
                     if launched < len(unique):
-                        time.sleep(0.5)
+                        await asyncio.sleep(0.5)
                 except OSError as exc:
                     self.app.notify(f"Errore apertura {host_alias}: {exc}", severity="error")
             else:
@@ -1852,10 +1861,10 @@ class ObserveScreen(BravoricScreen):
         import asyncio
         import time
 
-        while True:
+        while self._started:
             await asyncio.sleep(1.0)
             if not self._started:
-                continue
+                break
             if self._rotating and self._views and not self._interactive:
                 if time.monotonic() - self._last_input >= self._interval:
                     self._advance(1)
@@ -1965,7 +1974,7 @@ class ObserveScreen(BravoricScreen):
     async def _poll_pane(self) -> None:
         import asyncio
 
-        while True:
+        while self._started:
             interval = 0.4 if self._interactive else self.POLL_SECONDS
             await asyncio.sleep(interval)
             if self._started and self._views:
@@ -2824,6 +2833,8 @@ class LaunchAgentScreen(BravoricScreen):
         screen = ""
 
         while True:
+            if not self.is_mounted:
+                return
             raw = (await _io(ssh_adapter.run_tmux_action, self._host, probe_cmd, cfg)).stdout or ""
             parts = raw.split("__SEP__")
             alive = bool(parts) and parts[0].strip().endswith("HAS")
@@ -2895,6 +2906,8 @@ class LaunchAgentScreen(BravoricScreen):
                     # Esci dalla TUI e apri il terminale con la sessione tmux appena
                     # creata (con l'agente dentro), esattamente come quando si preme
                     # Enter su una sessione o si crea con `n` + nome + Ctrl+S.
+                    if not self.is_mounted:
+                        return
                     self.app.request_launch(
                         LaunchAction(kind="attach", host=self._host, session=slug)
                     )
@@ -3786,12 +3799,6 @@ def _sftp_cli(config, host_a_ref: str, host_b_ref: str) -> None:
         commander.launch_commander(host_a, host_b, env)
     except FileNotFoundError as exc:
         print(str(exc), file=sys.stderr)
-    finally:
-        if helper is not None:
-            try:
-                helper.unlink(missing_ok=True)
-            except OSError:
-                pass
 
 
 def app_password_resolver(config):

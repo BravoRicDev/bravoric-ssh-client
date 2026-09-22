@@ -113,6 +113,7 @@ class TunnelManager:
         self._tunnels: dict[str, list[TunnelProcess]] = {}
         self._state_path = state_path
         self._loaded = state_path is None  # niente file -> non serve caricare
+        self._lock = threading.Lock()
 
     @property
     def state_path(self) -> Path | None:
@@ -242,28 +243,38 @@ class TunnelManager:
                 except OSError:
                     pass
             return False, str(exc)
-        if helper is not None:
-            threading.Thread(target=self._cleanup_on_exit, args=(proc, helper), daemon=True).start()
-        self._tunnels.setdefault(host.alias, []).append(
-            TunnelProcess(
-                spec=spec,
-                port=spec.local_port,
-                proc=proc,
-                pid=proc.pid,
-                started_at=time.time(),
-                helper=helper,
+        with self._lock:
+            self._tunnels.setdefault(host.alias, []).append(
+                TunnelProcess(
+                    spec=spec,
+                    port=spec.local_port,
+                    proc=proc,
+                    pid=proc.pid,
+                    started_at=time.time(),
+                    helper=helper,
+                )
             )
-        )
-        self._persist()
+            # L'helper askpass serve solo per l'handshake iniziale; con ControlPersist
+            # la connessione persiste dopo che l'helper ha fatto il suo lavoro.
+            # Rimuoviamolo subito per non lasciare password in chiaro su disco.
+            if helper is not None:
+                try:
+                    helper.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            self._persist()
         return True, f"tunnel {spec.local_addr()} attivo ({proc.pid})"
 
     def _cleanup_on_exit(self, proc: subprocess.Popen, helper: Path) -> None:
-        proc.wait()
+        # Non usato più: l'helper viene rimosso subito dopo l'avvio.
+        # Mantenuto come placeholder se in futuro servisse cleanup differito.
+        proc.wait(timeout=60)
         try:
             helper.unlink(missing_ok=True)
         except OSError:
             pass
-        self._persist()
+        with self._lock:
+            self._persist()
 
     def _build_args(
         self,
@@ -322,49 +333,52 @@ class TunnelManager:
     def stop(self, host_alias: str, port: int) -> bool:
         """Termina il tunnel sulla ``port`` per l'host (se attivo)."""
         self._ensure_loaded()
-        procs = self._tunnels.get(host_alias) or []
-        for t in list(procs):
-            if t.port == port and t.running:
-                t.terminate()
-                procs.remove(t)
-                if t.helper is not None:
-                    try:
-                        t.helper.unlink(missing_ok=True)
-                    except OSError:
-                        pass
-                self._persist()
-                return True
+        with self._lock:
+            procs = self._tunnels.get(host_alias) or []
+            for t in list(procs):
+                if t.port == port and t.running:
+                    t.terminate()
+                    procs.remove(t)
+                    if t.helper is not None:
+                        try:
+                            t.helper.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                    self._persist()
+                    return True
         return False
 
     def stop_all(self, host_alias: str) -> int:
         """Termina tutti i tunnel attivi dell'host; ritorna il numero terminato."""
         self._ensure_loaded()
-        count = 0
-        procs = self._tunnels.get(host_alias) or []
-        for t in list(procs):
-            if t.running:
-                t.terminate()
-                count += 1
-            if t.helper is not None:
-                try:
-                    t.helper.unlink(missing_ok=True)
-                except OSError:
-                    pass
-        if procs:
-            self._tunnels[host_alias] = []
-        if count:
-            self._persist()
-        return count
+        with self._lock:
+            procs = self._tunnels.get(host_alias) or []
+            count = 0
+            for t in list(procs):
+                if t.running:
+                    t.terminate()
+                    count += 1
+                if t.helper is not None:
+                    try:
+                        t.helper.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+            if procs:
+                self._tunnels[host_alias] = []
+            if count:
+                self._persist()
+            return count
 
     def active(self, host_alias: str) -> list[TunnelProcess]:
         """Tunnel attivi dell'host (solo quelli con processo vivo)."""
         self._ensure_loaded()
-        procs = self._tunnels.get(host_alias) or []
-        alive = [t for t in procs if t.running]
-        if len(alive) != len(procs):
-            self._tunnels[host_alias] = alive
-            self._persist()
-        return alive
+        with self._lock:
+            procs = self._tunnels.get(host_alias) or []
+            alive = [t for t in procs if t.running]
+            if len(alive) != len(procs):
+                self._tunnels[host_alias] = alive
+                self._persist()
+            return alive
 
     def any_active(self, host_alias: str) -> bool:
         return bool(self.active(host_alias))

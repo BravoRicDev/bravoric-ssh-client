@@ -234,63 +234,33 @@ def transfer_file_direct(
     src_env = askpass_env(src_password) if src_password else dict(os.environ)
     dst_env = askpass_env(dst_password) if dst_password else dict(os.environ)
 
+    # Avviamo il processo sorgente (get a stdout)
+    p_src = subprocess.Popen(
+        src_cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=src_env,
+    )
+
+    # Avviamo il processo destinazione (put da stdin)
+    p_dst = subprocess.Popen(
+        dst_cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=dst_env,
+    )
+
+    # Inviamo i comandi SFTP ai rispettivi processi
+    # Sorgente: get file a stdout (usando '-' come target locale per sftp get)
+    p_src.stdin.write(f"get {src_path} -\n".encode())
+    p_src.stdin.close()
+
+    # Destinazione: put da stdin a destinazione (usando '-' come sorgente locale)
+    p_dst.stdin.write(f"put - {dst_path}\n".encode())
+
     try:
-        # Avviamo il processo sorgente (get a stdout)
-        p_src = subprocess.Popen(
-            src_cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=src_env,
-        )
-
-        # Avviamo il processo destinazione (put da stdin)
-        p_dst = subprocess.Popen(
-            dst_cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=dst_env,
-        )
-
-        # Inviamo i comandi SFTP ai rispettivi processi
-        # Sorgente: get file a stdout (usando '-' come target locale per sftp get)
-        p_src.stdin.write(f"get {src_path} -\n")
-        p_src.stdin.close()
-
-        # Destinazione: put da stdin a destinazione (usando '-' come sorgente locale)
-        p_dst.stdin.write(f"put - {dst_path}\n")
-        p_dst.stdin.close()
-
-        # Leggiamo da sorgente e scriviamo a destinazione in streaming
-        # Nota: per sftp get '-' scrive l'output binario sul suo stdout.
-        # Ma dato che abbiamo usato text=True, gestiamo il testo o convertiamo in binario.
-        # Per sicurezza riavviamo senza text=True per lo streaming binario efficiente.
-        p_src.kill()
-        p_dst.kill()
-
-        p_src = subprocess.Popen(
-            src_cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=src_env,
-        )
-        p_dst = subprocess.Popen(
-            dst_cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=dst_env,
-        )
-
-        p_src.stdin.write(f"get {src_path} -\n".encode())
-        p_src.stdin.close()
-
-        p_dst.stdin.write(f"put - {dst_path}\n".encode())
-
         # Stream loop
         while True:
             chunk = p_src.stdout.read(1024 * 1024)  # 1 MB chunk
@@ -313,8 +283,11 @@ def transfer_file_direct(
             stdout=f"Source exit: {p_src.returncode}, Dest exit: {p_dst.returncode}",
             stderr=f"Source err: {src_err}\nDest err: {dst_err}",
         )
-
     finally:
+        for pr in (p_src, p_dst):
+            if pr.poll() is None:
+                pr.kill()
+                pr.wait()
         if src_password:
             Path(src_env.get("SSH_ASKPASS", "")).unlink(missing_ok=True)
         if dst_password:

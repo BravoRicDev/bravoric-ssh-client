@@ -444,18 +444,23 @@ def run_remote_command(
                         text=True,
                         env=env_dict,
                     )
-                    stdout_lines = []
-                    while True:
-                        line = p.stdout.readline()
-                        if not line:
-                            break
-                        stdout_lines.append(line)
-                        stream_callback(line)
-                    p.wait(timeout=timeout)
-                    stderr = p.stderr.read()
-                    proc = subprocess.CompletedProcess(
-                        args, p.returncode, "".join(stdout_lines), stderr
-                    )
+                    try:
+                        stdout_lines = []
+                        while True:
+                            line = p.stdout.readline()
+                            if not line:
+                                break
+                            stdout_lines.append(line)
+                            stream_callback(line)
+                        p.wait(timeout=timeout)
+                        stderr = p.stderr.read()
+                        proc = subprocess.CompletedProcess(
+                            args, p.returncode, "".join(stdout_lines), stderr
+                        )
+                    finally:
+                        if p.poll() is None:
+                            p.kill()
+                            p.wait()
                 else:
                     proc = subprocess.run(
                         args, capture_output=True, text=True, timeout=timeout, env=env_dict

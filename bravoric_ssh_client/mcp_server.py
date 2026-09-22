@@ -181,6 +181,14 @@ def _wait_run_and_read(
             return True, (read_res.stdout or "").strip(), ""
         time.sleep(1)
     adapter.run_tmux_action(host, f"tmux kill-session -t {q(name)} 2>/dev/null", mcp._ssh_cfg())
+    # Cleanup logfile on timeout
+    from .ssh.broadcast import run_snippet_on_host
+    run_snippet_on_host(
+        host,
+        f"rm -f {q(logfile)} 2>/dev/null",
+        mcp._ssh_cfg(),
+        timeout=10,
+    )
     return False, "", f"timeout dopo {timeout}s"
 
 
@@ -194,6 +202,7 @@ class PaneDiffTracker:
 
     def __init__(self) -> None:
         self._cache: dict[tuple[str, str], list[str]] = {}
+        self._max_cache_size = 200  # max entries to prevent unbounded growth
 
     def reset(self, key: tuple[str, str] | None = None) -> None:
         """Azzera un singolo snapshot (o l'intera cache se ``key`` è None)."""
@@ -201,6 +210,14 @@ class PaneDiffTracker:
             self._cache.clear()
         else:
             self._cache.pop(key, None)
+
+    def _evict_if_needed(self) -> None:
+        """Evict oldest entries if cache exceeds max size."""
+        if len(self._cache) > self._max_cache_size:
+            # Remove oldest 20% of entries
+            excess = len(self._cache) - self._max_cache_size
+            for key in list(self._cache.keys())[:excess + int(self._max_cache_size * 0.2)]:
+                self._cache.pop(key, None)
 
     @staticmethod
     def _sliding_window_delta(old: list[str], new: list[str]) -> list[str]:
@@ -231,6 +248,7 @@ class PaneDiffTracker:
         """Aggiorna lo snapshot e ritorna ``(is_first_sample, delta)``."""
         old = self._cache.get(key)
         self._cache[key] = current_lines
+        self._evict_if_needed()
         if old is None:
             return True, current_lines[-15:]
         return False, self._sliding_window_delta(old, current_lines)

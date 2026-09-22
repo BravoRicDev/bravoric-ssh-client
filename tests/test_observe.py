@@ -215,7 +215,7 @@ def test_reopen_all_dedup(monkeypatch, tmp_path: Path):
             await pilot.pause()
             assert isinstance(app.screen, RecentScreen), type(app.screen).__name__
             app.screen.action_reopen_all()
-            await pilot.pause(0.3)
+            await pilot.pause(1.5)
             # 2 uniche -> 2 processi ptyxis
             assert len(launched) == 2, launched
             # ogni Popen: [ptyxis, "-x", "sh -c 'exec ... --attach host sess'"]

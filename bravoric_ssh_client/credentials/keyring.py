@@ -13,6 +13,8 @@ dopo ``TIMEOUT_SECONDS``; da quel momento le successive letture falliscono subit
 from __future__ import annotations
 
 import threading
+import queue
+import functools
 
 import keyring
 import keyring.errors
@@ -24,6 +26,30 @@ from . import CredentialError, CredentialProvider
 TIMEOUT_SECONDS = 6.0
 
 _unresponsive = threading.Event()
+_unresponsive_lock = threading.Lock()
+
+# Single persistent worker thread with queue to avoid thread-per-call leak.
+_worker_queue: "queue.Queue[tuple[functools.partial, queue.Queue]]" = queue.Queue()
+_worker_started = False
+_worker_thread: threading.Thread | None = None
+
+
+def _worker_loop() -> None:
+    while True:
+        task, result_queue = _worker_queue.get()
+        try:
+            result_queue.put(("ok", task()))
+        except Exception as exc:
+            result_queue.put(("error", exc))
+        _worker_queue.task_done()
+
+
+def _ensure_worker() -> None:
+    global _worker_thread, _worker_started
+    if not _worker_started:
+        _worker_thread = threading.Thread(target=_worker_loop, daemon=True, name="keyring-worker")
+        _worker_thread.start()
+        _worker_started = True
 
 
 def keyring_responsive() -> bool:
@@ -36,25 +62,19 @@ class _Timeout(Exception):
 
 
 def _run_bounded(fn):
-    """Esegue ``fn()`` in un thread e fallisce se non risponde entro il timeout."""
-    box: dict[str, object] = {}
-
-    def target() -> None:
-        try:
-            box["value"] = fn()
-        except Exception as exc:  # noqa: BLE001 - rilanciata al chiamante
-            box["error"] = exc
-
-    worker = threading.Thread(target=target, daemon=True)
-    worker.start()
-    worker.join(TIMEOUT_SECONDS)
-    if worker.is_alive():
-        _unresponsive.set()
+    """Esegue ``fn()`` nel worker persistente e fallisce se non risponde entro il timeout."""
+    _ensure_worker()
+    result_queue: queue.Queue = queue.Queue()
+    _worker_queue.put((functools.partial(fn), result_queue))
+    try:
+        status, value = result_queue.get(timeout=TIMEOUT_SECONDS)
+    except queue.Empty:
+        with _unresponsive_lock:
+            _unresponsive.set()
         raise _Timeout
-    if "error" in box:
-        raise box["error"]  # type: ignore[misc]
-    _unresponsive.clear()
-    return box.get("value")
+    if status == "error":
+        raise value
+    return value
 
 
 class KeyringProvider(CredentialProvider):

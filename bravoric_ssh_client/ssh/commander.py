@@ -16,6 +16,7 @@ from pathlib import Path
 
 from ..config import Host
 from .shellutil import write_askpass_helper
+from .tmux_runner import _schedule_cleanup_posix
 
 
 def mc_available() -> bool:
@@ -105,6 +106,11 @@ def launch_commander(
     url_b = build_url(host_b, path=path_b)
     # exec: sostituisce il processo (come per ssh). Su Windows subprocess + exit.
     if os.name == "posix":
+        # Su POSIX, l'exec non torna mai. Usiamo un guardian fork per pulire l'helper askpass.
+        helper = None
+        if "SSH_ASKPASS" in env:
+            helper = Path(env["SSH_ASKPASS"])
+        _schedule_cleanup_posix(helper)
         os.execvpe(mc, [mc, url_a, url_b], env)
     else:
         import subprocess
