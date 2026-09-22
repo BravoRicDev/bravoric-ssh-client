@@ -2325,7 +2325,7 @@ class QuickLaunchScreen(BravoricScreen):
     ]
 
     CSS = """
-    QuickLaunchScreen #ql-outer { margin-top: 4; }
+    QuickLaunchScreen #ql-outer { width: 100%; margin-top: 4; }
     QuickLaunchScreen #ql-spacer-l { width: 1fr; }
     QuickLaunchScreen #ql-spacer-r { width: 1fr; }
     QuickLaunchScreen #ql-box { width: 60; height: auto; padding: 1 2; border: round $primary; }
