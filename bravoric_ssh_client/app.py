@@ -2366,9 +2366,8 @@ class LaunchAgentScreen(BravoricScreen):
     async def action_submit(self) -> None:
         agent = str(self.query_one("#agent", Select).value or "")
         path = self.query_one("#path", Input).value.strip()
-        if not path:
-            # default to home
-            path = str(Path.home())
+        # Se vuoto, non forzare la home locale: lascia la directory di default
+        # della sessione tmux (home dell'utente remoto su SSH).
         title = self.query_one("#title", Input).value.strip()
         extra = self.query_one("#extra", Input).value.strip()
         prompt = self.query_one("#prompt", Input).value.strip()
@@ -2412,28 +2411,36 @@ class LaunchAgentScreen(BravoricScreen):
         q = _sh_quote
         started = _time.time()
 
-        # 1. Pre-check: directory e binario
-        self._status_text.update("Controllo pre-requisiti...")
-        pre = await _io(
-            ssh_adapter.run_tmux_action,
-            self._host,
-            f"bash -lc 'if [ -d {q(path)} ]; then echo PATH_OK; else echo PATH_MISSING; fi ; "
-            f"if command -v {q(agent)} >/dev/null 2>&1; then echo BIN_OK; "
-            f"else echo BIN_MISSING; fi'",
-            cfg,
-        )
-        pre_out = pre.stdout or ""
-        if "PATH_MISSING" in pre_out:
-            self._status_text.update(f"[red]Errore: directory inesistente: {path}[/]")
-            return
-        if "BIN_MISSING" in pre_out:
-            self._status_text.update(
-                f"[red]Errore: binario '{agent}' non trovato su {self._host.alias}[/]"
+        # Se path vuoto, usa la directory corrente della shell remota (default tmux)
+        if path:
+            pre = await _io(
+                ssh_adapter.run_tmux_action,
+                self._host,
+                f"bash -lc 'if [ -d {q(path)} ]; then echo PATH_OK; else echo PATH_MISSING; fi ; "
+                f"if command -v {q(agent)} >/dev/null 2>&1; then echo BIN_OK; "
+                f"else echo BIN_MISSING; fi'",
+                cfg,
             )
-            return
+            pre_out = pre.stdout or ""
+            if "PATH_MISSING" in pre_out:
+                self._status_text.update(f"[red]Errore: directory inesistente: {path}[/]")
+                return
+        else:
+            pre = await _io(
+                ssh_adapter.run_tmux_action,
+                self._host,
+                f"bash -lc 'if command -v {q(agent)} >/dev/null 2>&1; then echo BIN_OK; else echo BIN_MISSING; fi'",
+                cfg,
+            )
+            pre_out = pre.stdout or ""
+            if "BIN_MISSING" in pre_out:
+                self._status_text.update(
+                    f"[red]Errore: binario '{agent}' non trovato su {self._host.alias}[/]"
+                )
+                return
 
         # 2. Nome sessione
-        sess_title = title or f"{agent}-{Path(path).name or 'agent'}"
+        sess_title = title or f"{agent}-{Path(path).name or 'agent'}" if path else title or f"{agent}-sessione"
         # slug sicuro
         import re
 
@@ -2465,12 +2472,20 @@ class LaunchAgentScreen(BravoricScreen):
 
         # 4. Crea sessione detached
         self._status_text.update("Creazione sessione tmux...")
-        res = await _io(
-            ssh_adapter.run_tmux_action,
-            self._host,
-            f"tmux new -d -s {q(slug)} -c {q(path)} 'exec bash -l'",
-            cfg,
-        )
+        if path:
+            res = await _io(
+                ssh_adapter.run_tmux_action,
+                self._host,
+                f"tmux new -d -s {q(slug)} -c {q(path)} 'exec bash -l'",
+                cfg,
+            )
+        else:
+            res = await _io(
+                ssh_adapter.run_tmux_action,
+                self._host,
+                f"tmux new -d -s {q(slug)} 'exec bash -l'",
+                cfg,
+            )
         if not res.ok:
             self._status_text.update(
                 f"[red]Errore creazione sessione: {res.stderr.strip() or 'fallita'}[/]"
