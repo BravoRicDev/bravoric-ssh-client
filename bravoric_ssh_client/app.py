@@ -307,7 +307,7 @@ class HostScreen(BravoricScreen):
         Binding("R", "rotations", "Rotazioni"),
         Binding("u", "tunnels", "Tunnel"),
         Binding("B", "broadcast", "Broadcast"),
-        Binding("meta+n", "launch_agent_localhost", "Avvia agente su localhost"),
+        Binding("ctrl+shift+n", "launch_agent_localhost", "Avvia agente su localhost"),
     ]
 
     def __init__(self, config: Config):
@@ -338,7 +338,7 @@ class HostScreen(BravoricScreen):
         yield Label(
             "Enter: apri · a: aggiungi · e: modifica · d: elimina · D: duplica · p: password · t: test · "
             "i: import · g: gruppo · T: ping tutti · R: rotazioni · o: osserva · F: scambio file · "
-            "u: tunnel · B: broadcast · r: ricarica · q: esci · Meta+N: avvia agente su localhost",
+            "u: tunnel · B: broadcast · r: ricarica · q: esci · Ctrl+Shift+N: avvia agente su localhost",
             classes="hint",
         )
         yield Footer()
@@ -590,7 +590,8 @@ class HostScreen(BravoricScreen):
                 alias="localhost",
                 host="127.0.0.1",
                 user=os.environ.get("USER", "user"),
-                auth="none",
+                auth="",
+                local=True,
             )
         self.app.push_screen(LaunchAgentScreen(host, self._config))
 
