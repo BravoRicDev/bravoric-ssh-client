@@ -23,18 +23,20 @@ model_arg = "--model"
 
 [[candidates]]
 name = "hermes"
-# hermes model richiede TTY interattivo; estraiamo i modelli da ~/.hermes/config.yaml
-model_cmd = "python3 -c \"import yaml,os; f=os.path.expanduser('~/.hermes/config.yaml'); cfg=yaml.safe_load(open(f)) if os.path.exists(f) else {}; [print(v.get('default_model','')) for v in cfg.get('providers',{}).values() if v.get('default_model')]\""
+# hermes model richiede TTY interattivo; leggiamo da ~/.hermes/provider_models_cache.json
+model_cmd = "python3 -c \"import json,os; f=os.path.expanduser('~/.hermes/provider_models_cache.json'); d=json.load(open(f)) if os.path.exists(f) else {}; [print(p+'/'+(m.get('id','') if isinstance(m,dict) else str(m))) for p,v in d.items() for m in v.get('models',[]) if (m.get('id','') if isinstance(m,dict) else m)]\""
 model_arg = "-m"
 
 [[candidates]]
 name = "pi"
-model_cmd = ""
+# pi --list-models: header + righe "provider  model  ..."
+model_cmd = "pi --list-models 2>&1 | grep -v '^\\[' | awk 'NR>1 && NF>=2 {print $1\"/\"$2}'"
 model_arg = "--model"
 
 [[candidates]]
 name = "agy"
-model_cmd = ""
+# agy models: "model-id\tModel Name" oppure solo "model-id"
+model_cmd = "agy models 2>&1 | grep -v 'Fetching' | awk 'NF>=1 {print $1}'"
 model_arg = "--model"
 
 [[candidates]]
@@ -50,7 +52,7 @@ model_arg = "--model"
 [[candidates]]
 name = "codex"
 model_cmd = ""
-model_arg = ""
+model_arg = "-m"
 
 [[candidates]]
 name = "amp"
