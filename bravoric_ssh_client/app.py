@@ -2322,8 +2322,8 @@ class QuickLaunchScreen(BravoricScreen):
 
     BINDINGS = [
         Binding("escape", "cancel", "Annulla"),
-        Binding("up", "focus_previous", "Su", show=False, priority=True),
-        Binding("down", "focus_next", "Giù", show=False, priority=True),
+        Binding("up", "nav_up", "Su", show=False, priority=True),
+        Binding("down", "nav_down", "Giù", show=False, priority=True),
     ]
 
     CSS = """
@@ -2356,6 +2356,12 @@ class QuickLaunchScreen(BravoricScreen):
 
     def on_mount(self) -> None:
         self.run_worker(self._detect_agents(), exclusive=True, group="detect")
+
+    def action_nav_up(self) -> None:
+        self.focus_previous()
+
+    def action_nav_down(self) -> None:
+        self.focus_next()
 
     async def _detect_agents(self) -> None:
         cfg = self.app.ssh_cfg
