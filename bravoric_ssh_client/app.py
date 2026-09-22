@@ -2325,9 +2325,7 @@ class QuickLaunchScreen(BravoricScreen):
     ]
 
     CSS = """
-    QuickLaunchScreen #ql-outer { width: 100%; margin-top: 4; }
-    QuickLaunchScreen #ql-spacer-l { width: 1fr; }
-    QuickLaunchScreen #ql-spacer-r { width: 1fr; }
+    QuickLaunchScreen #ql-outer { width: 100%; align-horizontal: center; margin-top: 4; }
     QuickLaunchScreen #ql-box { width: 60; height: auto; padding: 1 2; border: round $primary; }
     QuickLaunchScreen #ql-grid { height: auto; }
     QuickLaunchScreen #ql-status { height: 1; color: $text-muted; margin-top: 1; }
@@ -2343,8 +2341,7 @@ class QuickLaunchScreen(BravoricScreen):
         self._status = Static("Rilevamento agenti...", id="ql-status")
 
     def compose(self) -> ComposeResult:
-        with Horizontal(id="ql-outer"):
-            yield Static(id="ql-spacer-l")
+        with Vertical(id="ql-outer"):
             with Vertical(id="ql-box"):
                 yield Label("[b]Lancia agente[/b]", classes="box-title")
                 with Vertical(id="ql-grid"):
@@ -2353,7 +2350,6 @@ class QuickLaunchScreen(BravoricScreen):
                 yield Button("Terminale", id="btn-terminal", variant="default")
                 yield self._status
                 yield Label("Esc: annulla", classes="hint")
-            yield Static(id="ql-spacer-r")
 
     def on_mount(self) -> None:
         self.run_worker(self._detect_agents(), exclusive=True, group="detect")
