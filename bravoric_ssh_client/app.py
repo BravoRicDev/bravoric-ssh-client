@@ -3204,6 +3204,7 @@ class SessionScreen(BravoricScreen):
         Binding("a", "launch_agent", "Lancia agente"),
         Binding("P", "send_text", "Invia testo"),
         Binding("F", "send_file", "Invia file"),
+        Binding("y", "copy_buffer", "Copia buffer"),
         Binding("q", "quit", "Esci"),
     ]
 
@@ -3227,7 +3228,7 @@ class SessionScreen(BravoricScreen):
         yield Label(
             "Enter: attach · R: attach RO · n: nuova · r: rinomina · k: kill · K: kill server · "
             "d: dettagli · i: info pane · a: lancia agente · P: invia testo · F: invia file · "
-            "w: finestre · D: detach · g: aggiorna · s: shell · Esc: indietro",
+            "y: copia buffer · w: finestre · D: detach · g: aggiorna · s: shell · Esc: indietro",
             classes="hint",
         )
         yield Footer()
@@ -3444,6 +3445,41 @@ class SessionScreen(BravoricScreen):
             self._update_status(
                 f"Errore: {res.stderr.strip() or res.stdout.strip() or 'fallita'}", error=True
             )
+
+    def action_copy_buffer(self) -> None:
+        name = self._selected_session()
+        if not name:
+            self.app.notify("Nessuna sessione selezionata")
+            return
+        self.run_worker(self._copy_buffer_async(name), thread=False, exclusive=True)
+
+    async def _copy_buffer_async(self, name: str) -> None:
+        self._update_status(f"Leggo buffer di '{name}'…")
+        try:
+            res = await _io(
+                ssh_adapter.run_tmux_action,
+                self._host,
+                f"tmux show-buffer -t {_sh_quote(name)}",
+                self.app.ssh_cfg,
+            )
+        except Exception as exc:
+            self._update_status(f"Errore: {exc}", error=True)
+            return
+        if not res.ok:
+            self._update_status(
+                f"Buffer vuoto o errore: {res.stderr.strip() or 'nessun buffer'}", error=True
+            )
+            return
+        content = res.stdout
+        try:
+            import subprocess as _sp
+            _sp.run(["wl-copy"], input=content, text=True, check=True)
+            self.app.notify(f"Buffer di '{name}' copiato negli appunti ({len(content)} car.)")
+            self._update_status(f"Buffer copiato ({len(content)} caratteri)")
+        except FileNotFoundError:
+            self._update_status("wl-copy non trovato — installa wl-clipboard", error=True)
+        except Exception as exc:
+            self._update_status(f"Errore copia locale: {exc}", error=True)
 
     def action_details(self) -> None:
         name = self._selected_session()
