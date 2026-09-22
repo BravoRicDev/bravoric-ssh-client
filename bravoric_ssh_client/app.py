@@ -126,26 +126,33 @@ class BravoricApp(App):
         config_path: Path | None = None,
         start_rotation: str | None = None,
         launch_agent: bool = False,
+        quick_launch: bool = False,
     ):
         super().__init__()
         self._config_path = config_path
         self._config = config
         self._start_rotation = start_rotation
         self._launch_agent = launch_agent
+        self._quick_launch = quick_launch
         self.ssh_cfg: SshConfig | None = None
         self.tunnels = TunnelManager()
+
+    def _localhost_host(self) -> Host:
+        return (self._config.host("localhost") if self._config else None) or Host(
+            alias="localhost", host="127.0.0.1",
+            user=os.environ.get("USER", "user"), auth="", local=True,
+        )
 
     def on_mount(self) -> None:
         self._load_config()
         if self._start_rotation:
             self._open_rotation(self._start_rotation)
+        elif self._quick_launch:
+            self.push_host_screen()
+            self.push_screen(QuickLaunchScreen(self._localhost_host(), self._config or Config()))
         elif self._launch_agent:
             self.push_host_screen()
-            host = (self._config.host("localhost") if self._config else None) or Host(
-                alias="localhost", host="127.0.0.1",
-                user=os.environ.get("USER", "user"), auth="", local=True,
-            )
-            self.push_screen(LaunchAgentScreen(host, self._config or Config()))
+            self.push_screen(LaunchAgentScreen(self._localhost_host(), self._config or Config()))
         else:
             self.push_host_screen()
 
@@ -2309,6 +2316,109 @@ class PaneInfoScreen(BravoricScreen):
         self.refresh_info()
 
 
+class QuickLaunchScreen(BravoricScreen):
+    """Lancio rapido agente su localhost: solo selezione agente, nessun altro campo."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Annulla"),
+        Binding("ctrl+s", "submit", "Lancia"),
+        Binding("enter", "submit", "Lancia"),
+    ]
+
+    CSS = """
+    QuickLaunchScreen { align: center middle; }
+    QuickLaunchScreen #quick-box { width: 50; height: auto; padding: 1 2; border: round $primary; }
+    QuickLaunchScreen #ql-status { height: 1; color: $text-muted; }
+    """
+
+    def __init__(self, host: Host, config: Config):
+        super().__init__()
+        self._host = host
+        self._config = config
+        self._agents_cfg: list[dict] = LaunchAgentScreen._load_agents_config()
+        self._status = Static("Rilevamento agenti...", id="ql-status")
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="quick-box"):
+            yield Label("[b]Lancia agente[/b]", classes="box-title")
+            yield Select(
+                [("Rilevamento in corso...", "__detecting__")],
+                value="__detecting__",
+                id="ql-agent",
+                allow_blank=False,
+            )
+            yield self._status
+            yield Label("Enter / Ctrl+S: lancia · Esc: annulla", classes="hint")
+
+    def on_mount(self) -> None:
+        self.run_worker(self._detect_agents(), exclusive=True, group="detect")
+
+    async def _detect_agents(self) -> None:
+        cfg = self.app.ssh_cfg
+        q = _sh_quote
+        names = [c["name"] for c in self._agents_cfg]
+        if not names:
+            self._status.update("[yellow]Nessun agente configurato[/]")
+            return
+        check_cmd = (
+            "for _a in "
+            + " ".join(q(n) for n in names)
+            + "; do command -v $_a >/dev/null 2>&1 && echo \"FOUND:$_a\"; done"
+        )
+        result = await _io(ssh_adapter.run_tmux_action, self._host, check_cmd, cfg)
+        found = set()
+        for line in (result.stdout or "").splitlines():
+            if line.startswith("FOUND:"):
+                found.add(line[6:].strip())
+        available = [c for c in self._agents_cfg if c["name"] in found]
+        if not available:
+            self._status.update("[yellow]Nessun agente trovato[/]")
+            return
+        sel = self.query_one("#ql-agent", Select)
+        sel.set_options([(c["name"], c["name"]) for c in available])
+        sel.value = available[0]["name"]
+        sel.focus()
+        self._status.update(f"{', '.join(c['name'] for c in available)}")
+
+    async def action_submit(self) -> None:
+        import re as _re
+        agent_val = self.query_one("#ql-agent", Select).value
+        if not agent_val or agent_val in (Select.BLANK, "__detecting__"):
+            self._status.update("[red]Seleziona agente[/]")
+            return
+        agent = str(agent_val)
+        self._status.update(f"Lancio {agent}...")
+        cfg = self.app.ssh_cfg
+        q = _sh_quote
+        base = _re.sub(r"[^A-Za-z0-9_-]+", "-", agent)[:40].strip("-")
+        slug = base
+        for i in range(2, 100):
+            has = await _io(
+                ssh_adapter.run_tmux_action,
+                self._host,
+                f"tmux has-session -t {q(slug)} 2>/dev/null",
+                cfg,
+            )
+            if not has.ok:
+                break
+            slug = f"{base}-{i}"
+        res = await _io(
+            ssh_adapter.run_tmux_action,
+            self._host,
+            f"tmux new -d -s {q(slug)} 'exec bash -l'",
+            cfg,
+        )
+        if not res.ok:
+            self._status.update(f"[red]{res.stderr.strip() or 'errore sessione'}[/]")
+            return
+        await _io(ssh_adapter.tmux_send_input, self._host, slug, agent, cfg, enter=True, mode="keys")
+        self.app.notify(f"'{agent}' in sessione '{slug}'", severity="information")
+        self.app.request_launch(LaunchAction(kind="attach", host=self._host, session=slug))
+
+    def action_cancel(self) -> None:
+        self.app.pop_screen()
+
+
 class LaunchAgentScreen(BravoricScreen):
     """Schermata per lanciare un agente AI in tmux detached.
 
@@ -3685,6 +3795,7 @@ def main(argv: list[str] | None = None) -> None:
     sftp_host_a = None
     sftp_host_b = None
     launch_agent = False
+    quick_launch = False
     i = 0
     while i < len(argv):
         if argv[i] in ("-c", "--config") and i + 1 < len(argv):
@@ -3709,8 +3820,12 @@ def main(argv: list[str] | None = None) -> None:
             launch_agent = True
             i += 1
             continue
+        if argv[i] == "--quick-launch":
+            quick_launch = True
+            i += 1
+            continue
         i += 1
-    app = BravoricApp(config_path=config_path, start_rotation=rotation_name, launch_agent=launch_agent)
+    app = BravoricApp(config_path=config_path, start_rotation=rotation_name, launch_agent=launch_agent, quick_launch=quick_launch)
     if sftp_host_a and sftp_host_b:
         # modalità CLI: apre Midnight Commander sui due host (o locale+remoto)
         if app._config is None:
