@@ -20,6 +20,7 @@ from textual.binding import Binding
 from textual.containers import Grid, Vertical
 from textual.screen import Screen
 from textual.widgets import (
+    Checkbox,
     Footer,
     Header,
     Input,
@@ -2315,8 +2316,11 @@ class LaunchAgentScreen(BravoricScreen):
     CSS = """
     LaunchAgentScreen #agent-form { overflow-y: auto; }
     LaunchAgentScreen #agent-form Input { margin: 0 0 1 0; }
+    LaunchAgentScreen #agent-form Input[type="number"] { width: 10ch; }
     LaunchAgentScreen #status-box { height: 1; width: 80%; }
     LaunchAgentScreen #output-box { display: none; }
+    LaunchAgentScreen.compact .opt-field { display: none; }
+    LaunchAgentScreen.very-compact .opt-field-2 { display: none; }
     """
 
     _AGENTS = ["opencode", "claude", "pi"]
@@ -2342,22 +2346,36 @@ class LaunchAgentScreen(BravoricScreen):
             )
             yield Label("Directory di lavoro:")
             yield Input(id="path", placeholder="Lascia vuoto per home")
-            yield Label("Titolo (opzionale):")
-            yield Input(id="title", placeholder="nome sessione")
-            yield Label("Argomenti extra (opzionale):")
-            yield Input(id="extra", placeholder='--model gpt-5, run "prompt"')
+            yield Label("Titolo (opzionale):", classes="opt-field")
+            yield Input(id="title", placeholder="nome sessione", classes="opt-field")
+            yield Label("Argomenti extra (opzionale):", classes="opt-field opt-field-2")
+            yield Input(id="extra", placeholder='--model gpt-5, run "prompt"', classes="opt-field opt-field-2")
             yield Label("Prompt iniziale (opzionale, multiriga con \\n):")
             yield Input(id="prompt", placeholder="prompt da inviare all'agente")
             yield Label("Timeout attesa (s):")
-            yield Input(id="timeout", placeholder="25", value="25")
+            yield Input(type="number", value="25", id="timeout", placeholder="5-120")
             yield Label("Force (ricrea se esiste):")
-            yield Input(id="force", placeholder="true / false", value="false")
+            yield Checkbox(value=False, id="force")
             yield Label("Ctrl+S: lancia · Ctrl+R: refresh · Esc: annulla", classes="hint")
         yield self._status_text
         yield Footer()
 
     def on_mount(self) -> None:
+        self._apply_compact(self.size.height)
         self.query_one("#agent", Select).focus()
+
+    def on_resize(self, event) -> None:
+        self._apply_compact(event.size.height)
+
+    def _apply_compact(self, height: int) -> None:
+        if height < 26:
+            self.add_class("compact")
+        else:
+            self.remove_class("compact")
+        if height < 22:
+            self.add_class("very-compact")
+        else:
+            self.remove_class("very-compact")
 
     def action_refresh(self) -> None:
         self._status_text.update("Refresh...")
@@ -2371,23 +2389,8 @@ class LaunchAgentScreen(BravoricScreen):
         title = self.query_one("#title", Input).value.strip()
         extra = self.query_one("#extra", Input).value.strip()
         prompt = self.query_one("#prompt", Input).value.strip()
-        timeout_str = self.query_one("#timeout", Input).value.strip()
-        force_str = self.query_one("#force", Input).value.strip().lower()
-
-        if not agent:
-            self.app.notify("Seleziona un agente", severity="error")
-            return
-        if agent not in self._AGENTS:
-            self.app.notify(
-                f"Agente non valido. Scegli tra: {', '.join(self._AGENTS)}", severity="error"
-            )
-            return
-
-        try:
-            timeout = int(timeout_str)
-        except ValueError:
-            timeout = 25
-        force = force_str in ("true", "1", "yes")
+        timeout = int(self.query_one("#timeout", Input).value or 25)
+        force = self.query_one("#force", Checkbox).value
 
         self._status_text.update("Lancio agente in corso...")
         self._output.update("")
@@ -2440,7 +2443,11 @@ class LaunchAgentScreen(BravoricScreen):
                 return
 
         # 2. Nome sessione
-        sess_title = title or f"{agent}-{Path(path).name or 'agent'}" if path else title or f"{agent}-sessione"
+        sess_title = (
+            title or f"{agent}-{Path(path).name or 'agent'}"
+            if path
+            else title or f"{agent}-sessione"
+        )
         # slug sicuro
         import re
 
@@ -2458,17 +2465,33 @@ class LaunchAgentScreen(BravoricScreen):
             cfg,
         )
         if has.ok:
-            if not force:
-                self._status_text.update(
-                    f"[red]Sessione '{slug}' già esistente (usa Force=true per ricreare)[/]"
+            if force:
+                await _io(
+                    ssh_adapter.run_tmux_action,
+                    self._host,
+                    f"tmux kill-session -t {q(slug)} 2>/dev/null",
+                    cfg,
                 )
-                return
-            await _io(
-                ssh_adapter.run_tmux_action,
-                self._host,
-                f"tmux kill-session -t {q(slug)} 2>/dev/null",
-                cfg,
-            )
+            else:
+                # Auto-trova nome libero: slug-2, slug-3, ...
+                base_slug = slug
+                found = False
+                for i in range(2, 100):
+                    candidate = f"{base_slug}-{i}"
+                    has2 = await _io(
+                        ssh_adapter.run_tmux_action,
+                        self._host,
+                        f"tmux has-session -t {q(candidate)} 2>/dev/null",
+                        cfg,
+                    )
+                    if not has2.ok:
+                        slug = candidate
+                        win_title = candidate
+                        found = True
+                        break
+                if not found:
+                    self._status_text.update(f"[red]Nessun nome libero per '{base_slug}' (prova Force)[/]")
+                    return
 
         # 4. Crea sessione detached
         self._status_text.update("Creazione sessione tmux...")
