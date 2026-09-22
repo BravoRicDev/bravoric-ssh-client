@@ -2315,6 +2315,8 @@ class LaunchAgentScreen(BravoricScreen):
     CSS = """
     LaunchAgentScreen #agent-form { overflow-y: auto; }
     LaunchAgentScreen #agent-form Input { margin: 0 0 1 0; }
+    LaunchAgentScreen #agent-form TextArea { margin: 0 0 1 0; }
+    LaunchAgentScreen #prompt { height: 4; }
     LaunchAgentScreen #timeout { width: 10; }
     LaunchAgentScreen #status-box { height: 1; width: 80%; }
     LaunchAgentScreen #output-box { display: none; }
@@ -2368,8 +2370,8 @@ class LaunchAgentScreen(BravoricScreen):
                     id="model",
                     allow_blank=False,
                 )
-            yield Label("Prompt iniziale (opzionale, multiriga con \\n):")
-            yield Input(id="prompt", placeholder="prompt da inviare all'agente")
+            yield Label("Prompt iniziale (opzionale):")
+            yield TextArea(id="prompt")
             yield Label("Timeout attesa (s):")
             yield Input(type="number", value="25", id="timeout", placeholder="5-120")
             yield Label("Titolo sessione (opzionale):", classes="opt-field")
@@ -2494,7 +2496,7 @@ class LaunchAgentScreen(BravoricScreen):
         path = self.query_one("#path", Input).value.strip()
         title = self.query_one("#title", Input).value.strip()
         extra = self.query_one("#extra", Input).value.strip()
-        prompt = self.query_one("#prompt", Input).value.strip()
+        prompt = self.query_one("#prompt", TextArea).text.strip()
         timeout = int(self.query_one("#timeout", Input).value or 25)
         force = self.query_one("#force", Checkbox).value
 
