@@ -2310,7 +2310,7 @@ class LaunchAgentScreen(BravoricScreen):
     CSS = """
     LaunchAgentScreen #agent-form Input { margin: 0 0 1 0; }
     LaunchAgentScreen #status-box { height: 3; }
-    LaunchAgentScreen #output-box { height: 1fr; }
+    LaunchAgentScreen #output-box { height: 1fr; width: 80%; }
     """
 
     _AGENTS = ["opencode", "claude", "pi"]
