@@ -2462,7 +2462,9 @@ class LaunchAgentScreen(BravoricScreen):
             if line.strip()
         ]
         if not models:
-            self._status_text.update("Pronto per il lancio")
+            err = (result.stderr or "").strip().splitlines()
+            hint = f": {err[-1][:60]}" if err else ""
+            self._status_text.update(f"[dim]Nessun modello per {agent_name}{hint} — agente sceglie da solo[/]")
             return
 
         self._current_model_arg = agent_cfg.get("model_arg", "")
