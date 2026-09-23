@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .config import Config, Host, Tunnel, default_config_path, load_config
+from .config import Config, Host, Tunnel, default_config_path, is_loopback_bind, load_config
 from .credentials.factory import resolve_password
 from .snippets import Snippet, add_snippet, load_snippets, remove_snippet
 from .ssh import adapter
@@ -301,6 +301,31 @@ class BravoricMcp:
                 f"Fine esecuzione tool: {tool_name} (durata: {duration:.2f}ms)", extra=extra
             )
             self._current_correlation_id = old_id
+
+    def _instrument(self, tool_name: str, method: Any) -> Any:
+        """Avvolge un metodo tool in un context ``correlation`` per tracing/metriche.
+
+        Preserva firma e annotazioni (via ``functools.wraps``) così la generazione
+        dello schema dei tool MCP resta corretta. Supporta metodi sync e async.
+        """
+        import functools
+        import inspect as _inspect
+
+        if _inspect.iscoroutinefunction(method):
+
+            @functools.wraps(method)
+            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                with self.correlation(tool_name):
+                    return await method(*args, **kwargs)
+
+            return async_wrapper
+
+        @functools.wraps(method)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            with self.correlation(tool_name):
+                return method(*args, **kwargs)
+
+        return wrapper
 
     def get_metrics(self) -> str:
         """Restituisce le metriche operative del server MCP."""
@@ -2203,6 +2228,11 @@ class BravoricMcp:
         bind: str = "localhost",
     ) -> str:
         host = self._host(alias)
+        if not is_loopback_bind(bind):
+            return (
+                f"errore: bind '{bind}' non consentito "
+                "(solo loopback: localhost/127.0.0.1/::1)"
+            )
         spec = Tunnel(
             name=name,
             kind=kind.upper(),
@@ -2717,7 +2747,10 @@ class BravoricMcp:
             ),
         ]
         for name, method_name, description in specs:
-            self.server.tool(name=name, description=description)(getattr(self, method_name))
+            method = getattr(self, method_name)
+            self.server.tool(name=name, description=description)(
+                self._instrument(name, method)
+            )
 
     def run(self) -> None:
         self.server.run(transport="stdio")

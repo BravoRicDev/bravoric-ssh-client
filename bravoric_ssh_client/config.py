@@ -64,6 +64,19 @@ AUTH_METHODS = ("", "keyring", "plain", "key", "prompt")
 # Tipi di tunnel SSH supportati: L (forward locale), R (remoto), D (SOCKS).
 TUNNEL_KINDS = ("L", "R", "D")
 
+# Indirizzi di bind considerati loopback (non esposti in rete).
+LOOPBACK_BINDS = ("localhost", "127.0.0.1", "::1")
+
+
+def is_loopback_bind(bind: str) -> bool:
+    """True se l'indirizzo di bind è loopback (localhost/127.x/::1).
+
+    Solo gli indirizzi loopback sono ammessi per i tunnel: un bind su 0.0.0.0
+    o su un IP pubblico esporrebbe il forwarding all'intera rete.
+    """
+    b = (bind or "").strip()
+    return b in LOOPBACK_BINDS or b.startswith("127.")
+
 
 @dataclass
 class Tunnel:
@@ -180,13 +193,19 @@ def _parse_tunnel(raw: dict[str, Any]) -> Tunnel:
     else:
         remote_host = ""
         remote_port = 0
+    bind = str(raw.get("bind") or "localhost")
+    if not is_loopback_bind(bind):
+        raise ConfigError(
+            f"Tunnel: bind '{bind}' non è loopback e esporrebbe il tunnel in rete. "
+            "Usa 'localhost', '127.0.0.1' o '::1'."
+        )
     return Tunnel(
         name=str(raw.get("name") or ""),
         kind=kind,
         local_port=local_port,
         remote_host=remote_host,
         remote_port=remote_port,
-        bind=str(raw.get("bind") or "localhost"),
+        bind=bind,
     )
 
 
@@ -278,7 +297,7 @@ def load_config(path: Path | None = None) -> Config:
         path=path,
         restart_after_ssh=_as_bool(general.get("restart_after_ssh")),
         history_size=int(general.get("history_size") or 10),
-        audit_log=_as_bool(general.get("audit_log")),
+        audit_log=_as_bool(general.get("audit_log"), default=True),
         strict_host_key_checking=str(general.get("strict_host_key_checking") or "accept-new"),
         snippets_file=str(general["snippets_file"]) if general.get("snippets_file") else None,
         tunnels_file=str(general["tunnels_file"]) if general.get("tunnels_file") else None,

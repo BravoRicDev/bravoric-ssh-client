@@ -429,11 +429,14 @@ def remote_edit_file(
     count: int = 0,
     timeout: int = 30,
 ) -> dict[str, Any]:
-    """Sostituisce pattern nel file remoto con sed/espressione regolare semplice.
+    """Sostituisce pattern nel file remoto con espressione regolare semplice.
 
     count=0 sostituisce tutte le occorrenze. count>0 limita il numero di sostituzioni.
+
+    Sicurezza: nessuna shell coinvolta; path/pattern/replacement sono trasportati
+    in base64 ed eseguiti con ``re.subn`` Python, evitando shell injection.
     """
-    import shlex
+    import base64
 
     try:
         count_val = int(count)
@@ -442,25 +445,38 @@ def remote_edit_file(
     except (ValueError, TypeError):
         count_val = 0
 
-    safe_pattern = shlex.quote(pattern)
-    safe_replacement = shlex.quote(replacement)
-    safe_path = shlex.quote(path)
-
-    if count_val > 0:
-        sed_cmd = f"sed -i '0,/{safe_pattern}/s/{safe_pattern}/{safe_replacement}/' {safe_path}"
-    else:
-        sed_cmd = f"sed -i 's/{safe_pattern}/{safe_replacement}/g' {safe_path}"
+    b64_path = base64.b64encode(path.encode("utf-8")).decode("ascii")
+    b64_pattern = base64.b64encode(pattern.encode("utf-8")).decode("ascii")
+    b64_replacement = base64.b64encode(replacement.encode("utf-8")).decode("ascii")
 
     script = f"""
-import subprocess, json, os
-path = {json.dumps(path)}
-cmd = {json.dumps(sed_cmd)}
+import base64, json, os, re
+
+MAX_FILE_SIZE = {MAX_FILE_SIZE}
+path = base64.b64decode({json.dumps(b64_path)}).decode('utf-8')
+pattern = base64.b64decode({json.dumps(b64_pattern)}).decode('utf-8')
+replacement = base64.b64decode({json.dumps(b64_replacement)}).decode('utf-8')
+count = {count_val}
+
+path = os.path.expanduser(path)
 try:
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or 'sed failed')
-    size = os.path.getsize(path) if os.path.exists(path) else 0
-    print(json.dumps({{"ok": True, "path": path, "bytes": size}}))
+    if not os.path.exists(path):
+        raise FileNotFoundError(path)
+    file_size = os.path.getsize(path)
+    if file_size > MAX_FILE_SIZE:
+        print(json.dumps({{"ok": False, "error": "File troppo grande", "code": "file_too_large"}}))
+        exit(0)
+    with open(path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    new_content, n = re.subn(pattern, replacement, content, count=count)
+    if n == 0:
+        print(json.dumps({{"ok": False, "error": "pattern non trovato nel file"}}))
+        exit(0)
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(new_content)
+    print(json.dumps({{"ok": True, "path": path, "bytes": len(new_content), "replacements": n}}))
+except re.error as e:
+    print(json.dumps({{"ok": False, "error": "regex non valida: " + str(e)}}))
 except Exception as e:
     print(json.dumps({{"ok": False, "error": str(e)}}))
 """
@@ -712,14 +728,16 @@ except Exception as e:
 def remote_project_tree(
     host: Host, ssh_cfg: SshConfig | None, path: str, max_depth: int = 3, timeout: int = 30
 ) -> dict[str, Any]:
+    try:
+        depth_val = int(max_depth)
+    except (ValueError, TypeError):
+        depth_val = 3
+
     script = f"""
 import os, json
 
 base_path = os.path.abspath(os.path.expanduser({json.dumps(path)}))
-try:
-max_depth = int(max_depth)
-except (ValueError, TypeError):
-max_depth = 3
+max_depth = {depth_val}
 ignore_dirs = set(['node_modules', '.git', 'venv', '.venv', '__pycache__', 'dist', 'build', '.idea', '.vscode'])
 
 def build_tree(current_path, current_depth):
@@ -818,9 +836,9 @@ import subprocess, json
 
 name = {json.dumps(name)}
 try:
-lines = int(lines)
+    lines = int({lines})
 except (ValueError, TypeError):
-lines = 100
+    lines = 100
 level = {json.dumps(level)}
 grep = {json.dumps(grep)}
 
@@ -873,7 +891,7 @@ try:
             procs = []
             if "users:((" in process_col:
                 matches = re.findall(r'"?([^",]+)"?,pid=(\\d+)', process_col)
-                procs = [{{"name": m[0].strip('"'), "pid": int(m[1])}} for m in matches]
+                procs = [{"name": m[0].strip('"'), "pid": int(m[1])} for m in matches]
 
             ports.append({
                 "protocol": proto,
@@ -1032,6 +1050,7 @@ def replace_block(
     script = f"""
 import json, os
 
+MAX_FILE_SIZE = {MAX_FILE_SIZE}
 path = {json.dumps(path)}
 old_text = {json.dumps(old_text)}
 new_text = {json.dumps(new_text)}

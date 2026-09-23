@@ -6,6 +6,7 @@ Flusso: lista host -> (Enter) schermata sessioni tmux -> attach/crea/shell.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -3610,7 +3611,7 @@ class SessionScreen(BravoricScreen):
             res = await _io(
                 ssh_adapter.run_tmux_action,
                 self._host,
-                f"tmux show-buffer -t {_sh_quote(name)}",
+                "tmux show-buffer",
                 self.app.ssh_cfg,
             )
         except Exception as exc:
@@ -3811,16 +3812,466 @@ def app_password_resolver(config):
     return resolver
 
 
+def _cli_app(config_path):
+    """Crea un BravoricApp con la config caricata (pattern dei blocchi CLI di main)."""
+    app = BravoricApp(config_path=config_path)
+    if app._config is None:
+        app._load_config()
+    return app
+
+
+def _cli_resolve_host(app, ref: str) -> Host:
+    """Risolve un host per alias; errore descrittivo su stderr + exit 1 se assente."""
+    host = app._config.host(ref) if app._config else None
+    if not host:
+        print(f"Host '{ref}' non trovato in config", file=sys.stderr)
+        sys.exit(1)
+    return host
+
+
+def _list_hosts_cli(config_path) -> None:
+    """--list-hosts: stampa JSON di tutti gli host configurati."""
+    app = _cli_app(config_path)
+    cfg = app._config
+    out = []
+    for h in cfg.hosts:
+        out.append(
+            {
+                "alias": h.alias,
+                "host": h.host,
+                "user": h.user,
+                "port": h.port,
+                "auth": h.auth,
+                "group": h.group,
+                "jump_host": h.jump_host,
+                "auto_cycle": h.auto_cycle,
+                "cycle_interval": h.cycle_interval,
+                "local": bool(h.is_local()),
+                "tunnels": [
+                    {
+                        "name": t.name,
+                        "kind": t.kind,
+                        "local_port": t.local_port,
+                        "remote_host": t.remote_host,
+                        "remote_port": t.remote_port,
+                        "bind": t.bind,
+                    }
+                    for t in h.tunnels
+                ],
+                "password_present": app._host_password_present(h),
+            }
+        )
+    print(json.dumps(out, indent=2, ensure_ascii=False))
+    return
+
+
+def _list_sessions_cli(config_path, host_ref: str) -> None:
+    """--list-sessions <host>: stampa JSON delle sessioni tmux dell'host."""
+    app = _cli_app(config_path)
+    host = _cli_resolve_host(app, host_ref)
+    res = ssh_adapter.list_tmux_sessions(host, app.ssh_cfg)
+    print(
+        json.dumps(
+            {"ok": res.ok, "sessions": res.sessions, "error": res.error},
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
+    if not res.ok:
+        sys.exit(1)
+    return
+
+
+def _ping_cli(config_path, host_ref: str) -> None:
+    """--ping <host>: test TCP di raggiungibilità."""
+    app = _cli_app(config_path)
+    host = _cli_resolve_host(app, host_ref)
+    ok, msg = ssh_adapter.tcp_ping(host)
+    print(msg)
+    sys.exit(0 if ok else 1)
+
+
+def _pane_info_cli(config_path, host_ref: str, session: str) -> None:
+    """--pane-info <host> <session>: JSON con i dettagli della pane attiva."""
+    app = _cli_app(config_path)
+    host = _cli_resolve_host(app, host_ref)
+    res = ssh_adapter.tmux_pane_info(host, session, app.ssh_cfg)
+    print(
+        json.dumps(
+            {
+                "ok": res.ok,
+                "error": res.error,
+                "command": res.command,
+                "cwd": res.cwd,
+                "pid": res.pid,
+                "title": res.title,
+                "width": res.width,
+                "height": res.height,
+                "is_shell": res.is_shell,
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
+    if not res.ok:
+        print(res.error or "pane-info fallito", file=sys.stderr)
+        sys.exit(1)
+    return
+
+
+def _copy_buffer_cli(config_path, host_ref: str, session: str) -> None:
+    """--copy-buffer <host> <session>: copia il buffer tmux negli appunti (wl-copy)."""
+    app = _cli_app(config_path)
+    host = _cli_resolve_host(app, host_ref)
+    res = ssh_adapter.run_tmux_action(host, "tmux show-buffer", app.ssh_cfg)
+    if not res.ok or not res.stdout:
+        print(res.stderr.strip() or "buffer vuoto o errore", file=sys.stderr)
+        sys.exit(1)
+    content = res.stdout
+    try:
+        subprocess.run(["wl-copy"], input=content, text=True, check=True)
+    except FileNotFoundError:
+        print(
+            "wl-copy non installato (installa wl-clipboard): contenuto su stdout",
+            file=sys.stderr,
+        )
+        print(content, end="")
+    except Exception as exc:  # noqa: BLE001 - il contenuto resta comunque su stdout
+        print(f"Errore copia locale: {exc}", file=sys.stderr)
+        print(content, end="")
+    return
+
+
+def _send_text_cli(config_path, host_ref: str, session: str, text: str) -> None:
+    """--send-text <host> <session> <testo>: incolla il testo nella sessione tmux."""
+    app = _cli_app(config_path)
+    host = _cli_resolve_host(app, host_ref)
+    res = ssh_adapter.tmux_paste_buffer(host, session, text, app.ssh_cfg)
+    if res.ok:
+        print(f"Testo inviato a {host_ref}/{session}")
+    else:
+        print(res.stderr.strip() or "invio fallito", file=sys.stderr)
+        sys.exit(1)
+    return
+
+
+def _send_file_cli(config_path, host_ref: str, session: str, path: str) -> None:
+    """--send-file <host> <session> <percorso>: incolla il contenuto del file."""
+    app = _cli_app(config_path)
+    host = _cli_resolve_host(app, host_ref)
+    try:
+        content = Path(path).expanduser().read_text(encoding="utf-8", errors="replace")
+    except (FileNotFoundError, OSError) as exc:
+        print(f"Impossibile leggere '{path}': {exc}", file=sys.stderr)
+        sys.exit(1)
+    res = ssh_adapter.tmux_paste_buffer(host, session, content, app.ssh_cfg)
+    if res.ok:
+        print(f"File inviato a {host_ref}/{session}")
+    else:
+        print(res.stderr.strip() or "invio fallito", file=sys.stderr)
+        sys.exit(1)
+    return
+
+
+def _broadcast_worker(app, command: str, snippet_name: str, hosts_opt, use_tmux: bool) -> None:
+    """Esegue ``command`` sugli host indicati e stampa il JSON dei risultati."""
+    from .ssh import broadcast
+
+    cfg = app._config
+    if hosts_opt:
+        hosts = []
+        for ref in hosts_opt.split(","):
+            ref = ref.strip()
+            if not ref:
+                continue
+            hosts.append(_cli_resolve_host(app, ref))
+    else:
+        hosts = list(cfg.hosts)
+    if not hosts:
+        print("Nessun host da contattare", file=sys.stderr)
+        sys.exit(1)
+    if use_tmux:
+        results = broadcast.run_snippet_on_hosts_tmux(hosts, command, snippet_name, app.ssh_cfg)
+    else:
+        results = broadcast.run_snippet_on_hosts(hosts, command, app.ssh_cfg)
+    payload = [
+        {
+            "host_alias": r.host_alias,
+            "ok": r.ok,
+            "exit_code": r.exit_code,
+            "stdout": r.stdout,
+            "stderr": r.stderr,
+            "error": r.error,
+            "session_name": r.session_name,
+        }
+        for r in results
+    ]
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    if any(not r.ok for r in results):
+        sys.exit(1)
+    return
+
+
+def _snippet_run_cli(config_path, name: str, hosts_opt, use_tmux: bool) -> None:
+    """--snippet-run <nome> [--hosts ...] [--tmux]: esegue uno snippet salvato."""
+    from .snippets import load_snippets
+
+    app = _cli_app(config_path)
+    snippet = next((s for s in load_snippets(app._config) if s.name == name), None)
+    if not snippet:
+        print(f"Snippet '{name}' non trovato", file=sys.stderr)
+        sys.exit(1)
+    _broadcast_worker(app, snippet.command, snippet.name, hosts_opt, use_tmux)
+    return
+
+
+def _broadcast_cli(config_path, command: str, hosts_opt, use_tmux: bool) -> None:
+    """--broadcast <comando> --hosts <a,b> [--tmux]: comando libero su più host."""
+    if not hosts_opt:
+        print("--broadcast richiede --hosts <alias1,alias2,...>", file=sys.stderr)
+        sys.exit(1)
+    app = _cli_app(config_path)
+    _broadcast_worker(app, command, "broadcast", hosts_opt, use_tmux)
+    return
+
+
+def _host_add_cli(
+    config_path,
+    alias: str,
+    host_addr: str,
+    opt_user,
+    opt_port,
+    opt_auth,
+    opt_group,
+    opt_jump_host,
+    opt_cred_key,
+) -> None:
+    """--host-add <alias> <host> [opzioni]: aggiunge un host alla config."""
+    app = _cli_app(config_path)
+    cfg = app._config
+    if cfg.host(alias):
+        print(f"Host già esistente: '{alias}'", file=sys.stderr)
+        sys.exit(1)
+    if opt_auth is not None and opt_auth not in AUTH_METHODS:
+        print(f"auth non valido: '{opt_auth}' (attesi {AUTH_METHODS})", file=sys.stderr)
+        sys.exit(1)
+    if opt_port:
+        try:
+            port = int(opt_port)
+        except ValueError:
+            print(f"Porta non valida: '{opt_port}'", file=sys.stderr)
+            sys.exit(1)
+    else:
+        port = 22
+    host = Host(
+        alias=alias,
+        host=host_addr,
+        user=opt_user,
+        port=port,
+        auth=opt_auth or "",
+        group=opt_group,
+        jump_host=opt_jump_host,
+        cred_key=opt_cred_key,
+    )
+    cfg.hosts.append(host)
+    backup_config(cfg)
+    save_config(cfg)
+    print(f"Host aggiunto: {alias}")
+    return
+
+
+def _host_edit_cli(
+    config_path,
+    alias: str,
+    opt_user,
+    opt_port,
+    opt_auth,
+    opt_group,
+    opt_jump_host,
+    opt_cred_key,
+) -> None:
+    """--host-edit <alias> [opzioni]: modifica i campi passati di un host."""
+    app = _cli_app(config_path)
+    cfg = app._config
+    host = _cli_resolve_host(app, alias)
+    if opt_auth is not None:
+        if opt_auth not in AUTH_METHODS:
+            print(f"auth non valido: '{opt_auth}' (attesi {AUTH_METHODS})", file=sys.stderr)
+            sys.exit(1)
+        host.auth = opt_auth
+    if opt_user is not None:
+        host.user = opt_user
+    if opt_port is not None:
+        try:
+            host.port = int(opt_port)
+        except ValueError:
+            print(f"Porta non valida: '{opt_port}'", file=sys.stderr)
+            sys.exit(1)
+    if opt_group is not None:
+        host.group = opt_group
+    if opt_jump_host is not None:
+        host.jump_host = opt_jump_host
+    if opt_cred_key is not None:
+        host.cred_key = opt_cred_key
+    backup_config(cfg)
+    save_config(cfg)
+    print(f"Host modificato: {alias}")
+    return
+
+
+def _host_delete_cli(config_path, alias: str) -> None:
+    """--host-delete <alias>: rimuove un host dalla config."""
+    app = _cli_app(config_path)
+    cfg = app._config
+    host = _cli_resolve_host(app, alias)
+    cfg.hosts.remove(host)
+    backup_config(cfg)
+    save_config(cfg)
+    print(f"Host eliminato: {alias}")
+    return
+
+
+def _tunnel_action_cli(config_path, host_ref: str, tunnel_ref: str, start: bool) -> None:
+    """Avvia/ferma un tunnel dell'host (per nome o per local_port)."""
+    app = _cli_app(config_path)
+    host = _cli_resolve_host(app, host_ref)
+    tunnel = None
+    for cand in host.tunnels:
+        if cand.name == tunnel_ref or str(cand.local_port) == tunnel_ref:
+            tunnel = cand
+            break
+    if tunnel is None:
+        print(f"Tunnel '{tunnel_ref}' non trovato su '{host_ref}'", file=sys.stderr)
+        sys.exit(1)
+    if start:
+        jump, _ = app._jump_for(host)
+        ok, msg = app.tunnels.start(
+            host,
+            tunnel,
+            app._password_for(host),
+            password_resolver=app._password_for,
+            jump_host=jump,
+        )
+        print(msg)
+        sys.exit(0 if ok else 1)
+    ok = app.tunnels.stop(host.alias, tunnel.local_port)
+    if ok:
+        print(f"Tunnel {tunnel.local_port} fermato su {host.alias}")
+    else:
+        print(f"Tunnel {tunnel.local_port} non attivo su {host.alias}", file=sys.stderr)
+    sys.exit(0 if ok else 1)
+
+
+def _tunnel_start_cli(config_path, host_ref: str, tunnel_ref: str) -> None:
+    """--tunnel-start <host> <tunnel>."""
+    _tunnel_action_cli(config_path, host_ref, tunnel_ref, True)
+    return
+
+
+def _tunnel_stop_cli(config_path, host_ref: str, tunnel_ref: str) -> None:
+    """--tunnel-stop <host> <tunnel>."""
+    _tunnel_action_cli(config_path, host_ref, tunnel_ref, False)
+    return
+
+
+def _rotation_list_cli(config_path) -> None:
+    """--rotation-list: stampa JSON dei profili di rotazione salvati."""
+    from .rotation import load_rotations
+
+    app = _cli_app(config_path)
+    payload = [
+        {
+            "name": r.name,
+            "entries": [{"host": h, "session": s} for h, s in r.unique_entries()],
+        }
+        for r in load_rotations(app._config)
+    ]
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    return
+
+
+def _rotation_add_cli(config_path, name: str, raw_entries: list[str]) -> None:
+    """--rotation-add <nome> <host:sessione> ...: salva un profilo di rotazione."""
+    from .rotation import Rotation, add_rotation
+
+    app = _cli_app(config_path)
+    entries: list[tuple[str, str]] = []
+    for entry in raw_entries:
+        if ":" not in entry:
+            print(f"Entry non valida (atteso host:sessione): '{entry}'", file=sys.stderr)
+            sys.exit(1)
+        host_ref, session = entry.split(":", 1)
+        if not host_ref or not session:
+            print(f"Entry malformata: '{entry}'", file=sys.stderr)
+            sys.exit(1)
+        entries.append((host_ref, session))
+    if not entries:
+        print("Nessuna entry valida per la rotazione", file=sys.stderr)
+        sys.exit(1)
+    add_rotation(app._config, Rotation(name=name, entries=entries))
+    print(f"Rotazione salvata: {name}")
+    return
+
+
+def _rotation_remove_cli(config_path, name: str) -> None:
+    """--rotation-remove <nome>: rimuove un profilo di rotazione."""
+    from .rotation import remove_rotation
+
+    app = _cli_app(config_path)
+    remove_rotation(app._config, name)
+    print(f"Rotazione rimossa: {name}")
+    return
+
+
 def main(argv: list[str] | None = None) -> None:
     argv = argv if argv is not None else sys.argv[1:]
     config_path = None
     attach_host = None
     attach_session = None
+    attach_ro = False
+    shell_host = None
+    new_host = None
+    new_name = None
     rotation_name = None
     sftp_host_a = None
     sftp_host_b = None
     launch_agent = False
     quick_launch = False
+    list_hosts = False
+    list_sessions_host = None
+    ping_host = None
+    pane_info_host = None
+    pane_info_session = None
+    copy_buffer_host = None
+    copy_buffer_session = None
+    send_text_host = None
+    send_text_session = None
+    send_text_body = None
+    send_file_host = None
+    send_file_session = None
+    send_file_path = None
+    snippet_run_name = None
+    broadcast_cmd = None
+    opt_hosts = None
+    opt_tmux = False
+    host_add_alias = None
+    host_add_host = None
+    host_edit_alias = None
+    host_delete_alias = None
+    opt_user = None
+    opt_port = None
+    opt_auth = None
+    opt_group = None
+    opt_jump_host = None
+    opt_cred_key = None
+    tunnel_start_host = None
+    tunnel_start_tunnel = None
+    tunnel_stop_host = None
+    tunnel_stop_tunnel = None
+    rotation_list = False
+    rotation_add_name = None
+    rotation_add_entries = []
+    rotation_remove_name = None
     i = 0
     while i < len(argv):
         if argv[i] in ("-c", "--config") and i + 1 < len(argv):
@@ -3831,6 +4282,24 @@ def main(argv: list[str] | None = None) -> None:
             attach_host = argv[i + 1]
             attach_session = argv[i + 2]
             i += 3
+            continue
+        if argv[i] == "--attach-ro" and i + 2 < len(argv):
+            attach_host = argv[i + 1]
+            attach_session = argv[i + 2]
+            attach_ro = True
+            i += 3
+            continue
+        if argv[i] == "--shell" and i + 1 < len(argv):
+            shell_host = argv[i + 1]
+            i += 2
+            continue
+        if argv[i] == "--new" and i + 1 < len(argv):
+            new_host = argv[i + 1]
+            if i + 2 < len(argv) and not argv[i + 2].startswith("-"):
+                new_name = argv[i + 2]
+                i += 3
+            else:
+                i += 2
             continue
         if argv[i] == "--rotation" and i + 1 < len(argv):
             rotation_name = argv[i + 1]
@@ -3849,7 +4318,190 @@ def main(argv: list[str] | None = None) -> None:
             quick_launch = True
             i += 1
             continue
+        if argv[i] == "--list-hosts":
+            list_hosts = True
+            i += 1
+            continue
+        if argv[i] == "--list-sessions" and i + 1 < len(argv):
+            list_sessions_host = argv[i + 1]
+            i += 2
+            continue
+        if argv[i] == "--ping" and i + 1 < len(argv):
+            ping_host = argv[i + 1]
+            i += 2
+            continue
+        if argv[i] == "--pane-info" and i + 2 < len(argv):
+            pane_info_host = argv[i + 1]
+            pane_info_session = argv[i + 2]
+            i += 3
+            continue
+        if argv[i] == "--copy-buffer" and i + 2 < len(argv):
+            copy_buffer_host = argv[i + 1]
+            copy_buffer_session = argv[i + 2]
+            i += 3
+            continue
+        if argv[i] == "--send-text" and i + 3 < len(argv):
+            send_text_host = argv[i + 1]
+            send_text_session = argv[i + 2]
+            send_text_body = argv[i + 3]
+            i += 4
+            continue
+        if argv[i] == "--send-file" and i + 3 < len(argv):
+            send_file_host = argv[i + 1]
+            send_file_session = argv[i + 2]
+            send_file_path = argv[i + 3]
+            i += 4
+            continue
+        if argv[i] == "--snippet-run" and i + 1 < len(argv):
+            snippet_run_name = argv[i + 1]
+            i += 2
+            continue
+        if argv[i] == "--broadcast" and i + 1 < len(argv):
+            broadcast_cmd = argv[i + 1]
+            i += 2
+            continue
+        if argv[i] == "--hosts" and i + 1 < len(argv):
+            opt_hosts = argv[i + 1]
+            i += 2
+            continue
+        if argv[i] == "--tmux":
+            opt_tmux = True
+            i += 1
+            continue
+        if argv[i] == "--host-add" and i + 2 < len(argv):
+            host_add_alias = argv[i + 1]
+            host_add_host = argv[i + 2]
+            i += 3
+            continue
+        if argv[i] == "--host-edit" and i + 1 < len(argv):
+            host_edit_alias = argv[i + 1]
+            i += 2
+            continue
+        if argv[i] == "--host-delete" and i + 1 < len(argv):
+            host_delete_alias = argv[i + 1]
+            i += 2
+            continue
+        if argv[i] == "--user" and i + 1 < len(argv):
+            opt_user = argv[i + 1]
+            i += 2
+            continue
+        if argv[i] == "--port" and i + 1 < len(argv):
+            opt_port = argv[i + 1]
+            i += 2
+            continue
+        if argv[i] == "--auth" and i + 1 < len(argv):
+            opt_auth = argv[i + 1]
+            i += 2
+            continue
+        if argv[i] == "--group" and i + 1 < len(argv):
+            opt_group = argv[i + 1]
+            i += 2
+            continue
+        if argv[i] == "--jump-host" and i + 1 < len(argv):
+            opt_jump_host = argv[i + 1]
+            i += 2
+            continue
+        if argv[i] == "--cred-key" and i + 1 < len(argv):
+            opt_cred_key = argv[i + 1]
+            i += 2
+            continue
+        if argv[i] == "--tunnel-start" and i + 2 < len(argv):
+            tunnel_start_host = argv[i + 1]
+            tunnel_start_tunnel = argv[i + 2]
+            i += 3
+            continue
+        if argv[i] == "--tunnel-stop" and i + 2 < len(argv):
+            tunnel_stop_host = argv[i + 1]
+            tunnel_stop_tunnel = argv[i + 2]
+            i += 3
+            continue
+        if argv[i] == "--rotation-list":
+            rotation_list = True
+            i += 1
+            continue
+        if argv[i] == "--rotation-add" and i + 1 < len(argv):
+            rotation_add_name = argv[i + 1]
+            j = i + 2
+            while j < len(argv) and not argv[j].startswith("-") and ":" in argv[j]:
+                rotation_add_entries.append(argv[j])
+                j += 1
+            i = j
+            continue
+        if argv[i] == "--rotation-remove" and i + 1 < len(argv):
+            rotation_remove_name = argv[i + 1]
+            i += 2
+            continue
         i += 1
+    if list_hosts:
+        _list_hosts_cli(config_path)
+        return
+    if list_sessions_host:
+        _list_sessions_cli(config_path, list_sessions_host)
+        return
+    if ping_host:
+        _ping_cli(config_path, ping_host)
+        return
+    if pane_info_host and pane_info_session:
+        _pane_info_cli(config_path, pane_info_host, pane_info_session)
+        return
+    if copy_buffer_host and copy_buffer_session:
+        _copy_buffer_cli(config_path, copy_buffer_host, copy_buffer_session)
+        return
+    if send_text_host and send_text_session and send_text_body is not None:
+        _send_text_cli(config_path, send_text_host, send_text_session, send_text_body)
+        return
+    if send_file_host and send_file_session and send_file_path:
+        _send_file_cli(config_path, send_file_host, send_file_session, send_file_path)
+        return
+    if snippet_run_name:
+        _snippet_run_cli(config_path, snippet_run_name, opt_hosts, opt_tmux)
+        return
+    if broadcast_cmd:
+        _broadcast_cli(config_path, broadcast_cmd, opt_hosts, opt_tmux)
+        return
+    if host_add_alias and host_add_host:
+        _host_add_cli(
+            config_path,
+            host_add_alias,
+            host_add_host,
+            opt_user,
+            opt_port,
+            opt_auth,
+            opt_group,
+            opt_jump_host,
+            opt_cred_key,
+        )
+        return
+    if host_edit_alias:
+        _host_edit_cli(
+            config_path,
+            host_edit_alias,
+            opt_user,
+            opt_port,
+            opt_auth,
+            opt_group,
+            opt_jump_host,
+            opt_cred_key,
+        )
+        return
+    if host_delete_alias:
+        _host_delete_cli(config_path, host_delete_alias)
+        return
+    if tunnel_start_host and tunnel_start_tunnel:
+        _tunnel_start_cli(config_path, tunnel_start_host, tunnel_start_tunnel)
+        return
+    if tunnel_stop_host and tunnel_stop_tunnel:
+        _tunnel_stop_cli(config_path, tunnel_stop_host, tunnel_stop_tunnel)
+        return
+    if rotation_list:
+        _rotation_list_cli(config_path)
+        return
+    if rotation_add_name:
+        _rotation_add_cli(config_path, rotation_add_name, rotation_add_entries)
+        return
+    if rotation_remove_name:
+        _rotation_remove_cli(config_path, rotation_remove_name)
+        return
     app = BravoricApp(config_path=config_path, start_rotation=rotation_name, launch_agent=launch_agent, quick_launch=quick_launch)
     if sftp_host_a and sftp_host_b:
         # modalità CLI: apre Midnight Commander sui due host (o locale+remoto)
@@ -3871,13 +4523,64 @@ def main(argv: list[str] | None = None) -> None:
         password = app._password_for(host)
         jump, jump_password = app._jump_for(host)
         audit = app._audit_for(host, attach_session)
-        tmux_runner.tmux_attach(
+        if attach_ro:
+            tmux_runner.tmux_attach_ro(
+                host,
+                attach_session,
+                password,
+                jump_host=jump,
+                jump_password=jump_password,
+                audit=audit,
+            )
+        else:
+            tmux_runner.tmux_attach(
+                host,
+                attach_session,
+                password,
+                jump_host=jump,
+                jump_password=jump_password,
+                audit=audit,
+            )
+        return
+    if shell_host:
+        # modalità CLI: shell interattiva su un host
+        if app._config is None:
+            app._load_config()
+        host = app._config.host(shell_host) if app._config else None
+        if not host:
+            print(f"Host '{shell_host}' non trovato", file=sys.stderr)
+            return
+        password = app._password_for(host)
+        jump, jump_password = app._jump_for(host)
+        tmux_runner.ssh_shell(
             host,
-            attach_session,
             password,
             jump_host=jump,
             jump_password=jump_password,
-            audit=audit,
+            audit=app._audit_for(host),
+        )
+        return
+    if new_host:
+        # modalità CLI: crea (o rientra in) una sessione tmux
+        if app._config is None:
+            app._load_config()
+        host = app._config.host(new_host) if app._config else None
+        if not host:
+            print(f"Host '{new_host}' non trovato", file=sys.stderr)
+            return
+        from .history import record_history
+
+        session_name = new_name or host.alias
+        record_history(app._config, host.alias, session_name)
+        password = app._password_for(host)
+        jump, jump_password = app._jump_for(host)
+        tmux_runner.tmux_new(
+            host,
+            new_name,
+            password,
+            jump_host=jump,
+            jump_password=jump_password,
+            audit=app._audit_for(host, session_name),
         )
         return
     result = app.run()
