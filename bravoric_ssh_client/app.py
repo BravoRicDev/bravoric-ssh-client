@@ -18,7 +18,7 @@ from pathlib import Path
 from textual import getters
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Grid, Horizontal, Vertical
+from textual.containers import Grid, Vertical
 from textual.screen import Screen
 from textual.widgets import (
     Button,
@@ -141,8 +141,11 @@ class BravoricApp(App):
 
     def _localhost_host(self) -> Host:
         return (self._config.host("localhost") if self._config else None) or Host(
-            alias="localhost", host="127.0.0.1",
-            user=os.environ.get("USER", "user"), auth="", local=True,
+            alias="localhost",
+            host="127.0.0.1",
+            user=os.environ.get("USER", "user"),
+            auth="",
+            local=True,
         )
 
     def on_mount(self) -> None:
@@ -704,8 +707,8 @@ class RecentScreen(BravoricScreen):
         self.run_worker(self._reopen_all_worker(), thread=False)
 
     async def _reopen_all_worker(self) -> None:
-        import shutil
         import asyncio
+        import shutil
 
         unique: dict[str, tuple[str, str]] = {}
         for e in self._entries:
@@ -1547,8 +1550,8 @@ class RotationCatalogScreen(BravoricScreen):
         self.run_worker(self._reopen_all_rotations_worker(), thread=False)
 
     async def _reopen_all_rotations_worker(self) -> None:
-        import shutil
         import asyncio
+        import shutil
 
         unique: dict[str, tuple[str, str]] = {}
         for r in self._rotations:
@@ -2359,7 +2362,12 @@ class QuickLaunchScreen(BravoricScreen):
                 yield Label("[b]Lancia agente[/b]", classes="box-title")
                 with Vertical(id="ql-grid"):
                     for c in self._agents_cfg:
-                        yield Button(c["name"], id=f"btn-agent-{c['name']}", classes="ql-btn", variant="primary")
+                        yield Button(
+                            c["name"],
+                            id=f"btn-agent-{c['name']}",
+                            classes="ql-btn",
+                            variant="primary",
+                        )
                 yield Button("Terminale", id="btn-terminal", variant="default")
                 yield self._status
                 yield Label("Esc: annulla", classes="hint")
@@ -2385,7 +2393,7 @@ class QuickLaunchScreen(BravoricScreen):
         check_cmd = (
             "for _a in "
             + " ".join(q(n) for n in names)
-            + "; do command -v $_a >/dev/null 2>&1 && echo \"FOUND:$_a\"; done"
+            + '; do command -v $_a >/dev/null 2>&1 && echo "FOUND:$_a"; done'
         )
         result = await _io(ssh_adapter.run_tmux_action, self._host, check_cmd, cfg)
         found = set()
@@ -2409,10 +2417,11 @@ class QuickLaunchScreen(BravoricScreen):
         if btn_id == "btn-terminal":
             await self._do_launch(None)
         elif btn_id.startswith("btn-agent-"):
-            await self._do_launch(btn_id[len("btn-agent-"):])
+            await self._do_launch(btn_id[len("btn-agent-") :])
 
     async def _do_launch(self, agent: str | None) -> None:
         import re as _re
+
         label = agent or "terminale"
         self._status.update(f"Lancio {label}...")
         cfg = self.app.ssh_cfg
@@ -2439,7 +2448,9 @@ class QuickLaunchScreen(BravoricScreen):
             self._status.update(f"[red]{res.stderr.strip() or 'errore sessione'}[/]")
             return
         if agent:
-            await _io(ssh_adapter.tmux_send_input, self._host, slug, agent, cfg, enter=True, mode="keys")
+            await _io(
+                ssh_adapter.tmux_send_input, self._host, slug, agent, cfg, enter=True, mode="keys"
+            )
         self.app.notify(f"'{label}' in sessione '{slug}'", severity="information")
         self.app.request_launch(LaunchAction(kind="attach", host=self._host, session=slug))
 
@@ -2569,7 +2580,7 @@ class LaunchAgentScreen(BravoricScreen):
         check_cmd = (
             "for _a in "
             + " ".join(q(n) for n in names)
-            + "; do command -v $_a >/dev/null 2>&1 && echo \"FOUND:$_a\"; done"
+            + '; do command -v $_a >/dev/null 2>&1 && echo "FOUND:$_a"; done'
         )
         result = await _io(ssh_adapter.run_tmux_action, self._host, check_cmd, cfg)
         found = set()
@@ -2586,9 +2597,7 @@ class LaunchAgentScreen(BravoricScreen):
         agent_select.set_options([(c["name"], c["name"]) for c in available])
         agent_select.value = available[0]["name"]
         agent_select.focus()
-        self._status_text.update(
-            f"Trovati: {', '.join(c['name'] for c in available)}"
-        )
+        self._status_text.update(f"Trovati: {', '.join(c['name'] for c in available)}")
         await self._load_models(available[0]["name"])
 
     async def _load_models(self, agent_name: str) -> None:
@@ -2603,18 +2612,14 @@ class LaunchAgentScreen(BravoricScreen):
             return
 
         self._status_text.update(f"Caricamento modelli per {agent_name}...")
-        result = await _io(
-            ssh_adapter.run_tmux_action, self._host, agent_cfg["model_cmd"], cfg
-        )
-        models = [
-            line.strip()
-            for line in (result.stdout or "").splitlines()
-            if line.strip()
-        ]
+        result = await _io(ssh_adapter.run_tmux_action, self._host, agent_cfg["model_cmd"], cfg)
+        models = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
         if not models:
             err = (result.stderr or "").strip().splitlines()
             hint = f": {err[-1][:60]}" if err else ""
-            self._status_text.update(f"[dim]Nessun modello per {agent_name}{hint} — agente sceglie da solo[/]")
+            self._status_text.update(
+                f"[dim]Nessun modello per {agent_name}{hint} — agente sceglie da solo[/]"
+            )
             return
 
         self._current_model_arg = agent_cfg.get("model_arg", "")
@@ -2761,7 +2766,9 @@ class LaunchAgentScreen(BravoricScreen):
                         found = True
                         break
                 if not found:
-                    self._status_text.update(f"[red]Nessun nome libero per '{base_slug}' (prova Force)[/]")
+                    self._status_text.update(
+                        f"[red]Nessun nome libero per '{base_slug}' (prova Force)[/]"
+                    )
                     return
 
         # 4. Crea sessione detached
@@ -3625,6 +3632,7 @@ class SessionScreen(BravoricScreen):
         content = res.stdout
         try:
             import subprocess as _sp
+
             _sp.run(["wl-copy"], input=content, text=True, check=True)
             self.app.notify(f"Buffer di '{name}' copiato negli appunti ({len(content)} car.)")
             self._update_status(f"Buffer copiato ({len(content)} caratteri)")
@@ -4223,8 +4231,1643 @@ def _rotation_remove_cli(config_path, name: str) -> None:
     return
 
 
+# ============================================================================
+# CLI JSON per la GUI: output JSON nudo su stdout, errori su stderr + exit != 0.
+# Ogni flag riusa le funzioni di ssh/adapter.py, ssh/tunnels.py, ssh/audit.py,
+# snippets.py, config.py, file_ops.py, inspection.py. La TUI non viene toccata.
+# ============================================================================
+
+# flag -> numero di argomenti posizionali ("1+" = 1 + resto come lista)
+_JSON_FLAGS: dict[str, object] = {
+    "--list-hosts": 0,
+    "--host-info": 1,
+    "--tmux-present": 1,
+    "--ping": 1,
+    "--hosts-summary": 0,
+    "--status": 0,
+    "--host-health": 1,
+    "--host-network-ports": 1,
+    "--host-top-processes": 1,
+    "--list-sessions": 1,
+    "--session-details": 2,
+    "--create-session": 1,
+    "--rename-session": 3,
+    "--kill-session": 2,
+    "--detach-clients": 2,
+    "--kill-server": 1,
+    "--session-history": 0,
+    "--pane-info": 2,
+    "--pane-command": 2,
+    "--pane-diff": 2,
+    "--capture-pane": 2,
+    "--copy-buffer": 2,
+    "--list-windows": 2,
+    "--new-window": 2,
+    "--select-window": 3,
+    "--rename-window": 4,
+    "--kill-window": 3,
+    "--send-text": 3,
+    "--send-raw": 3,
+    "--send-file": 3,
+    "--snippet-list": 0,
+    "--snippet-add": 2,
+    "--snippet-remove": 1,
+    "--snippet-run": "1+",
+    "--broadcast": "1+",
+    "--broadcast-wait": "1+",
+    "--tunnel-list": 0,
+    "--tunnel-start": 3,
+    "--tunnel-stop": 2,
+    "--stop-tunnels": 1,
+    "--tunnel-health": 1,
+    "--rotation-list": 0,
+    "--rotation-add": "1+",
+    "--rotation-remove": 1,
+    "--read-file": 2,
+    "--write-file": 3,
+    "--edit-file": 2,
+    "--replace-block": 2,
+    "--project-tree": 1,
+    "--search-files": 2,
+    "--git-status": 1,
+    "--sftp-list": 1,
+    "--sftp-download": 3,
+    "--sftp-upload": 3,
+    "--sftp-get": 3,
+    "--sftp-put": 3,
+    "--sftp-mkdir": 2,
+    "--sftp-rm": 2,
+    "--sftp-rename": 3,
+    "--sftp-batch": "2+",
+    "--transfer-file": 4,
+    "--transfer-file-direct": 4,
+    "--run-command": 2,
+    "--run-command-all": 1,
+    "--run-command-many": 2,
+    "--run-and-wait": 2,
+    "--audit-list": 0,
+    "--audit-list-remote": 1,
+    "--read-audit-log": 1,
+    "--read-remote-audit-log": 2,
+    "--session-audit-log": 2,
+    "--find-in-sessions": 1,
+    "--packages": 3,
+    "--list-services": 1,
+    "--service": 2,
+    "--service-logs": 2,
+    "--sql": 2,
+    "--launch-agent": 2,
+}
+
+_JSON_OPTS = {
+    "--limit",
+    "--lines",
+    "--timeout",
+    "--max-lines",
+    "--max-depth",
+    "--offset",
+    "--pattern",
+    "--replacement",
+    "--old-text",
+    "--new-text",
+    "--content",
+    "--mode",
+    "--name",
+    "--command",
+    "--description",
+    "--path",
+    "--action",
+    "--manager",
+    "--level",
+    "--grep",
+    "--sort-by",
+    "--remote-host",
+    "--remote-port",
+    "--bind",
+    "--title",
+    "--extra-args",
+    "--wait-timeout",
+    "--prompt",
+    "--alias",
+    "--host",
+    "--user",
+    "--password",
+    "--host-addr",
+}
+_JSON_BOOL_OPTS = {"--recursive", "--enter", "--bracketed", "--force", "--tmux"}
+
+# Tutti i flag noti (TUI + JSON): serve a intercettare i flag sconosciuti.
+_ALL_KNOWN_FLAGS = (
+    set(_JSON_FLAGS)
+    | _JSON_OPTS
+    | _JSON_BOOL_OPTS
+    | {
+        "-c",
+        "--config",
+        "--attach",
+        "--attach-ro",
+        "--shell",
+        "--new",
+        "--rotation",
+        "--sftp",
+        "--launch-agent",
+        "--quick-launch",
+        "--list-hosts",
+        "--ping",
+        "--hosts",
+        "--host-add",
+        "--host-edit",
+        "--host-delete",
+        "--auth",
+        "--group",
+        "--jump-host",
+        "--cred-key",
+        "--port",
+    }
+)
+
+
+class _JsonCliError(Exception):
+    """Errore CLI da riportare su stderr con exit code non-zero."""
+
+
+def _jprint(obj: object) -> None:
+    """Stampa un oggetto come JSON nudo su stdout."""
+    print(json.dumps(obj, indent=2, ensure_ascii=False, default=str))
+
+
+def _jfail(msg: str, code: int = 1) -> None:
+    """Stampa l'errore su stderr ed esce con codice non-zero."""
+    print(msg, file=sys.stderr)
+    sys.exit(code)
+
+
+def _unwrap(res: object) -> object:
+    """Normalizza il risultato di un tool di inspection.
+
+    ``inspection._run_py`` avvolge la risposta in ``{"ok": true, "data": ...}``:
+    qui si estrae il payload per emettere JSON nudo. Su errore esce con messaggio
+    su stderr + exit code != 0.
+    """
+    if isinstance(res, dict):
+        if res.get("ok") is False or res.get("success") is False:
+            _jfail(str(res.get("error") or res.get("message") or "operazione fallita"))
+        if set(res) == {"ok", "data"}:
+            return res["data"]
+    return res
+
+
+def _parse_json_flags(argv: list[str]):
+    """Estrae (flag, args, opts, config_path) del primo comando JSON in argv.
+
+    Ritorna ``None`` se in argv non compare nessun flag JSON noto.
+    """
+    config_path = None
+    i = 0
+    found = None
+    while i < len(argv):
+        tok = argv[i]
+        if tok in ("-c", "--config") and i + 1 < len(argv):
+            config_path = Path(argv[i + 1]).expanduser()
+            i += 2
+            continue
+        if tok in _JSON_FLAGS:
+            arity = _JSON_FLAGS[tok]
+            if arity == "1+":
+                args = [argv[i + 1]] if i + 1 < len(argv) else []
+                j = i + 2
+                while j < len(argv) and not argv[j].startswith("-"):
+                    args.append(argv[j])
+                    j += 1
+                found = (tok, args)
+                i = j
+                break
+            if arity == "2+":
+                args = list(argv[i + 1 : i + 3])
+                j = i + 3
+                while j < len(argv) and not argv[j].startswith("-"):
+                    args.append(argv[j])
+                    j += 1
+                found = (tok, args)
+                i = j
+                break
+            if arity == 0:
+                found = (tok, [])
+                i += 1
+                break
+            n = int(arity)
+            args = list(argv[i + 1 : i + 1 + n])
+            found = (tok, args)
+            i += 1 + n
+            break
+        i += 1
+    if found is None:
+        return None
+    flag, args = found
+    opts: dict[str, object] = {}
+    while i < len(argv):
+        tok = argv[i]
+        if tok in _JSON_OPTS and i + 1 < len(argv):
+            opts[tok] = argv[i + 1]
+            i += 2
+            continue
+        if tok in _JSON_BOOL_OPTS:
+            opts[tok] = True
+            i += 1
+            continue
+        i += 1
+    return flag, args, opts, config_path
+
+
+def _opt_int(opts: dict, key: str, default: int) -> int:
+    try:
+        return int(opts.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _opt_str(opts: dict, key: str, default: str = "") -> str:
+    val = opts.get(key)
+    return str(val) if val is not None else default
+
+
+def _host_tunnels_payload(app, host: Host) -> list[dict]:
+    active = {t.port for t in app.tunnels.active(host.alias)}
+    return [
+        {
+            "name": t.name,
+            "kind": t.kind,
+            "local_port": t.local_port,
+            "remote_host": t.remote_host,
+            "remote_port": t.remote_port,
+            "bind": t.bind,
+            "active": t.local_port in active,
+        }
+        for t in host.tunnels
+    ]
+
+
+# ---------- Host / diagnostica ----------
+
+
+def _jh_list_hosts(app, args, opts) -> None:
+    cfg = app._config
+    out = []
+    for h in cfg.hosts:
+        out.append(
+            {
+                "alias": h.alias,
+                "host": h.host,
+                "user": h.effective_user(),
+                "port": h.port,
+                "auth": h.auth or cfg.credential_provider,
+                "group": h.group or "",
+                "jump_host": h.jump_host or "",
+                "local": h.is_local(),
+            }
+        )
+    _jprint(out)
+
+
+def _jh_host_info(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    _jprint(
+        {
+            "alias": h.alias,
+            "host": h.host,
+            "user": h.effective_user(),
+            "port": h.port,
+            "auth": h.auth,
+            "group": h.group or "",
+            "jump_host": h.jump_host or "",
+            "local": h.is_local(),
+            "tunnels": _host_tunnels_payload(app, h),
+        }
+    )
+
+
+def _jh_tmux_present(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    present = ssh_adapter.tmux_present(h, app.ssh_cfg)
+    _jprint({"alias": h.alias, "present": present})
+
+
+def _jh_ping(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    ok, detail = ssh_adapter.tcp_ping(h, timeout=_opt_int(opts, "--timeout", 2))
+    _jprint({"ok": ok, "detail": detail})
+    if not ok:
+        sys.exit(1)
+
+
+def _jh_hosts_summary(app, args, opts) -> None:
+    import concurrent.futures
+
+    cfg = app._config
+    timeout = float(opts.get("--timeout", 2.0) or 2.0)
+
+    def probe(h: Host) -> dict:
+        ok, detail = ssh_adapter.tcp_ping(h, timeout=timeout)
+        if not ok:
+            return {
+                "alias": h.alias,
+                "reachable": False,
+                "detail": detail,
+                "tmux": None,
+                "sessions": None,
+            }
+        try:
+            present = ssh_adapter.tmux_present(h, app.ssh_cfg)
+            res = ssh_adapter.list_tmux_sessions(h, app.ssh_cfg)
+            sessions = res.sessions if res.ok else None
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "alias": h.alias,
+                "reachable": True,
+                "detail": str(exc),
+                "tmux": None,
+                "sessions": None,
+            }
+        return {
+            "alias": h.alias,
+            "reachable": True,
+            "detail": detail,
+            "tmux": present,
+            "sessions": sessions,
+            "session_count": len(sessions) if sessions is not None else None,
+        }
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(probe, cfg.hosts))
+    results.sort(key=lambda r: r["alias"])
+    _jprint(results)
+
+
+def _jh_status(app, args, opts) -> None:
+    from . import __version__
+    from .ssh.audit import cfg_path_logs_dir
+
+    cfg = app._config
+    provider = cfg.credential_provider or "keyring"
+    keyring_ok = None
+    if provider == "keyring":
+        try:
+            import keyring
+
+            keyring_ok = keyring.get_keyring() is not None
+        except Exception:  # noqa: BLE001
+            keyring_ok = False
+    try:
+        logs_dir = str(cfg_path_logs_dir(cfg))
+    except OSError:
+        logs_dir = "n/d"
+    try:
+        local = next((h for h in cfg.hosts if h.is_local()), None)
+        tmux_local = ssh_adapter.tmux_present(local, app.ssh_cfg) if local else None
+    except Exception:  # noqa: BLE001
+        tmux_local = None
+    _jprint(
+        {
+            "version": __version__,
+            "config_path": str(cfg.path) if cfg.path else None,
+            "provider": provider,
+            "keyring_available": keyring_ok,
+            "plain_file": cfg.plain_file,
+            "hosts": len(cfg.hosts),
+            "tmux_local": tmux_local,
+            "logs_dir": logs_dir,
+            "audit_log": cfg.audit_log,
+            "snippets_file": cfg.snippets_file,
+            "tunnels_file": cfg.tunnels_file,
+            "restart_after_ssh": cfg.restart_after_ssh,
+        }
+    )
+
+
+def _jh_host_health(app, args, opts) -> None:
+    from .ssh import inspection
+
+    h = _cli_resolve_host(app, args[0])
+    _jprint(_unwrap(inspection.remote_host_health(h, app.ssh_cfg, timeout=_opt_int(opts, "--timeout", 30))))
+
+
+def _jh_host_network_ports(app, args, opts) -> None:
+    from .ssh import inspection
+
+    h = _cli_resolve_host(app, args[0])
+    _jprint(
+        _unwrap(
+            inspection.remote_host_network_ports(
+                h, app.ssh_cfg, timeout=_opt_int(opts, "--timeout", 30)
+            )
+        )
+    )
+
+
+def _jh_host_top_processes(app, args, opts) -> None:
+    from .ssh import inspection
+
+    h = _cli_resolve_host(app, args[0])
+    _jprint(
+        _unwrap(
+            inspection.remote_host_top_processes(
+                h,
+                app.ssh_cfg,
+                limit=_opt_int(opts, "--limit", 10),
+                sort_by=_opt_str(opts, "--sort-by", "cpu"),
+                timeout=_opt_int(opts, "--timeout", 30),
+            )
+        )
+    )
+
+
+# ---------- Sessioni tmux ----------
+
+
+def _jh_list_sessions(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    res = ssh_adapter.list_tmux_sessions(h, app.ssh_cfg)
+    if not res.ok:
+        _jfail(res.error or "list-sessions fallito")
+    _jprint(res.sessions)
+
+
+def _jh_session_details(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    res = ssh_adapter.tmux_session_details(h, args[1], app.ssh_cfg)
+    if not res.ok:
+        _jfail((res.stderr or "").strip() or "session-details fallito")
+    _jprint({"session": args[1], "details": (res.stdout or "").strip()})
+
+
+def _jh_create_session(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    name = _opt_str(opts, "--name") or h.alias
+    command = _opt_str(opts, "--command")
+    q = ssh_adapter._sh_quote
+    tmux_cmd = f"tmux new -d -s {q(name)}"
+    if command:
+        tmux_cmd += f" {q(command)}"
+    res = ssh_adapter.run_tmux_action(h, tmux_cmd, app.ssh_cfg)
+    if not res.ok:
+        _jfail((res.stderr or "").strip() or "creazione sessione fallita")
+    _jprint({"alias": h.alias, "session": name, "created": True})
+
+
+def _jh_rename_session(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    res = ssh_adapter.tmux_rename_session(h, args[1], args[2], app.ssh_cfg)
+    if not res.ok:
+        _jfail((res.stderr or "").strip() or "rename-session fallito")
+    _jprint({"alias": h.alias, "old": args[1], "new": args[2]})
+
+
+def _jh_kill_session(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    res = ssh_adapter.tmux_kill_session(h, args[1], app.ssh_cfg)
+    if not res.ok:
+        _jfail((res.stderr or "").strip() or "kill-session fallito")
+    _jprint({"alias": h.alias, "session": args[1], "killed": True})
+
+
+def _jh_detach_clients(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    res = ssh_adapter.tmux_detach_clients(h, args[1], app.ssh_cfg)
+    if not res.ok:
+        _jfail((res.stderr or "").strip() or "detach-clients fallito")
+    _jprint({"alias": h.alias, "session": args[1], "detached": True})
+
+
+def _jh_kill_server(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    res = ssh_adapter.tmux_kill_server(h, app.ssh_cfg)
+    if not res.ok:
+        _jfail((res.stderr or "").strip() or "kill-server fallito")
+    _jprint({"alias": h.alias, "killed": True})
+
+
+def _jh_session_history(app, args, opts) -> None:
+    from .history import load_history
+
+    entries = load_history(app._config)
+    limit = _opt_int(opts, "--limit", 0)
+    if limit > 0:
+        entries = entries[:limit]
+    _jprint([{"host": e.host, "session": e.session} for e in entries])
+
+
+# ---------- Pane / finestre ----------
+
+
+def _jh_pane_info(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    res = ssh_adapter.tmux_pane_info(h, args[1], app.ssh_cfg)
+    if not res.ok:
+        _jfail(res.error or "pane-info fallito")
+    _jprint(
+        {
+            "pane_id": res.pid,
+            "command": res.command,
+            "cwd": res.cwd,
+            "pid": res.pid,
+            "title": res.title,
+            "width": res.width,
+            "height": res.height,
+            "is_shell": res.is_shell,
+        }
+    )
+
+
+def _jh_pane_command(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    res = ssh_adapter.tmux_pane_command(h, args[1], app.ssh_cfg)
+    if not res.ok:
+        _jfail((res.stderr or "").strip() or "pane-command fallito")
+    _jprint({"alias": h.alias, "session": args[1], "command": (res.stdout or "").strip()})
+
+
+_PANE_DIFF_CACHE: dict[tuple[str, str], list[str]] = {}
+
+
+def _jh_pane_diff(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    session = args[1]
+    max_lines = _opt_int(opts, "--max-lines", 200)
+    cap = ssh_adapter.tmux_capture_pane(h, session, app.ssh_cfg, lines=max_lines)
+    if not cap.ok:
+        _jfail((cap.stderr or "").strip() or "pane-diff fallito")
+    current = (cap.stdout or "").splitlines()
+    key = (h.alias, session)
+    old = _PANE_DIFF_CACHE.get(key)
+    _PANE_DIFF_CACHE[key] = current
+    if old is None:
+        _jprint(
+            {
+                "alias": h.alias,
+                "session": session,
+                "is_first_sample": True,
+                "total_lines": len(current),
+                "diff_count": 0,
+                "new_lines": current[-15:],
+            }
+        )
+        return
+    delta: list[str] = []
+    max_overlap = min(len(old), len(current))
+    for k in range(max_overlap, 0, -1):
+        if old[-k:] == current[:k]:
+            delta = current[k:]
+            break
+    else:
+        import difflib
+
+        sm = difflib.SequenceMatcher(a=old, b=current, autojunk=False)
+        for tag, _i1, _i2, j1, j2 in sm.get_opcodes():
+            if tag in ("insert", "replace"):
+                delta.extend(current[j1:j2])
+    _jprint(
+        {
+            "alias": h.alias,
+            "session": session,
+            "is_first_sample": False,
+            "has_changes": len(delta) > 0,
+            "diff_count": len(delta),
+            "total_lines": len(current),
+            "new_content": "\n".join(delta),
+        }
+    )
+
+
+def _jh_capture_pane(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    lines = _opt_int(opts, "--lines", 200)
+    res = ssh_adapter.tmux_capture_pane(h, args[1], app.ssh_cfg, lines=lines)
+    if not res.ok:
+        _jfail((res.stderr or "").strip() or "capture-pane fallito")
+    _jprint({"alias": h.alias, "session": args[1], "content": res.stdout or ""})
+
+
+def _jh_copy_buffer(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    res = ssh_adapter.run_tmux_action(h, "tmux show-buffer", app.ssh_cfg)
+    if not res.ok:
+        _jfail((res.stderr or "").strip() or "copy-buffer fallito")
+    _jprint({"alias": h.alias, "session": args[1], "text": res.stdout or ""})
+
+
+def _jh_list_windows(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    res = ssh_adapter.tmux_list_windows_parsed(h, args[1], app.ssh_cfg)
+    if not res.ok:
+        _jfail(res.error or "list-windows fallito")
+    _jprint(
+        {
+            "alias": h.alias,
+            "session": args[1],
+            "count": len(res.windows),
+            "windows": [
+                {
+                    "index": w.index,
+                    "name": w.name,
+                    "active": w.active,
+                    "pane_count": w.pane_count,
+                    "layout": w.layout,
+                }
+                for w in res.windows
+            ],
+        }
+    )
+
+
+def _jh_new_window(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    name = _opt_str(opts, "--name") or None
+    res = ssh_adapter.tmux_new_window(h, args[1], name, app.ssh_cfg)
+    if not res.ok:
+        _jfail((res.stderr or "").strip() or "new-window fallito")
+    _jprint({"alias": h.alias, "session": args[1], "name": name or "", "created": True})
+
+
+def _jh_select_window(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    res = ssh_adapter.tmux_select_window(h, args[1], args[2], app.ssh_cfg)
+    if not res.ok:
+        _jfail((res.stderr or "").strip() or "select-window fallito")
+    _jprint({"alias": h.alias, "session": args[1], "index": args[2]})
+
+
+def _jh_rename_window(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    res = ssh_adapter.tmux_rename_window(h, args[1], args[2], args[3], app.ssh_cfg)
+    if not res.ok:
+        _jfail((res.stderr or "").strip() or "rename-window fallito")
+    _jprint({"alias": h.alias, "session": args[1], "window": args[2], "name": args[3]})
+
+
+def _jh_kill_window(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    res = ssh_adapter.tmux_kill_window(h, args[1], args[2], app.ssh_cfg)
+    if not res.ok:
+        _jfail((res.stderr or "").strip() or "kill-window fallito")
+    _jprint({"alias": h.alias, "session": args[1], "window": args[2], "killed": True})
+
+
+def _jh_send_text(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    res = ssh_adapter.tmux_send_input(
+        h, args[1], args[2], app.ssh_cfg, enter=bool(opts.get("--enter", False))
+    )
+    if not res.ok:
+        _jfail((res.stderr or "").strip() or "send-text fallito")
+    _jprint({"alias": h.alias, "session": args[1], "sent": True})
+
+
+def _jh_send_raw(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    res = ssh_adapter.tmux_send_raw(h, args[1], args[2], app.ssh_cfg)
+    if not res.ok:
+        _jfail((res.stderr or "").strip() or "send-raw fallito")
+    _jprint({"alias": h.alias, "session": args[1], "sent": True})
+
+
+def _jh_send_file(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    try:
+        content = Path(args[2]).expanduser().read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        _jfail(f"Impossibile leggere '{args[2]}': {exc}")
+    res = ssh_adapter.tmux_paste_buffer(
+        h, args[1], content, app.ssh_cfg, bracketed=bool(opts.get("--bracketed", True))
+    )
+    if not res.ok:
+        _jfail((res.stderr or "").strip() or "send-file fallito")
+    _jprint({"alias": h.alias, "session": args[1], "sent": True})
+
+
+# ---------- Snippet / broadcast ----------
+
+
+def _jh_snippet_list(app, args, opts) -> None:
+    from .snippets import load_snippets
+
+    _jprint(
+        [
+            {"name": s.name, "command": s.command, "description": s.description}
+            for s in load_snippets(app._config)
+        ]
+    )
+
+
+def _jh_snippet_add(app, args, opts) -> None:
+    from .snippets import Snippet, add_snippet
+
+    add_snippet(
+        app._config,
+        Snippet(name=args[0], command=args[1], description=_opt_str(opts, "--description")),
+    )
+    _jprint({"name": args[0], "added": True})
+
+
+def _jh_snippet_remove(app, args, opts) -> None:
+    from .snippets import remove_snippet
+
+    remove_snippet(app._config, args[0])
+    _jprint({"name": args[0], "removed": True})
+
+
+def _jh_snippet_run(app, args, opts) -> None:
+    from .snippets import load_snippets
+    from .ssh import broadcast
+
+    name = args[0]
+    aliases = args[1:]
+    snippet = next((s for s in load_snippets(app._config) if s.name == name), None)
+    if not snippet:
+        _jfail(f"Snippet '{name}' non trovato")
+    hosts = [_cli_resolve_host(app, a) for a in aliases if app._config.host(a) is not None]
+    results = broadcast.run_snippet_on_hosts(hosts, snippet.command, app.ssh_cfg)
+    _jprint(
+        [
+            {
+                "alias": r.host_alias,
+                "ok": r.ok,
+                "exit_code": r.exit_code,
+                "stdout": r.stdout,
+                "stderr": r.stderr,
+                "error": r.error,
+            }
+            for r in results
+        ]
+    )
+
+
+def _jh_broadcast(app, args, opts) -> None:
+    from .ssh import broadcast
+
+    command = args[0]
+    aliases = args[1:]
+    mode = _opt_str(opts, "--mode", "direct")
+    use_tmux = mode == "tmux" or bool(opts.get("--tmux"))
+    hosts = [_cli_resolve_host(app, a) for a in aliases]
+    if not hosts:
+        _jfail("broadcast richiede almeno un alias")
+    if use_tmux:
+        results = broadcast.run_snippet_on_hosts_tmux(hosts, command, "broadcast", app.ssh_cfg)
+    else:
+        results = broadcast.run_snippet_on_hosts(hosts, command, app.ssh_cfg)
+    _jprint(
+        [
+            {
+                "alias": r.host_alias,
+                "ok": r.ok,
+                "exit_code": r.exit_code,
+                "stdout": r.stdout,
+                "stderr": r.stderr,
+                "error": r.error,
+            }
+            for r in results
+        ]
+    )
+
+
+def _jh_broadcast_wait(app, args, opts) -> None:
+    import concurrent.futures
+
+    command = args[0]
+    aliases = args[1:]
+    timeout = _opt_int(opts, "--timeout", 300)
+    hosts = [_cli_resolve_host(app, a) for a in aliases]
+    if not hosts:
+        _jfail("broadcast-wait richiede almeno un alias")
+
+    def run(h: Host) -> dict:
+        ok, output, error = _tmux_run_and_read(app, h, command, timeout, "bwait")
+        return {"alias": h.alias, "ok": ok, "error": error, "output": output}
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(run, hosts))
+    results.sort(key=lambda r: r["alias"])
+    _jprint(results)
+
+
+# ---------- Tunnel ----------
+
+
+def _jh_tunnel_list(app, args, opts) -> None:
+    if args:
+        hosts = [_cli_resolve_host(app, args[0])]
+    else:
+        hosts = list(app._config.hosts)
+    payload = []
+    for h in hosts:
+        payload.append({"alias": h.alias, "tunnels": _host_tunnels_payload(app, h)})
+    _jprint(payload if len(payload) != 1 else payload[0]["tunnels"])
+
+
+def _jh_tunnel_start(app, args, opts) -> None:
+    from .config import Tunnel
+
+    h = _cli_resolve_host(app, args[0])
+    kind = args[1].upper()
+    local_port = int(args[2])
+    spec = Tunnel(
+        name=_opt_str(opts, "--name"),
+        kind=kind,
+        local_port=local_port,
+        remote_host=_opt_str(opts, "--remote-host"),
+        remote_port=_opt_int(opts, "--remote-port", 0),
+        bind=_opt_str(opts, "--bind", "localhost") or "localhost",
+    )
+    jump, _jpw = app._jump_for(h)
+    ok, msg = app.tunnels.start(
+        h,
+        spec,
+        app._password_for(h),
+        password_resolver=app._password_for,
+        jump_host=jump,
+    )
+    if not ok:
+        _jfail(msg)
+    _jprint(
+        {
+            "alias": h.alias,
+            "name": spec.name,
+            "kind": spec.kind,
+            "local_port": spec.local_port,
+            "remote_host": spec.remote_host,
+            "remote_port": spec.remote_port,
+            "bind": spec.bind,
+            "active": True,
+            "message": msg,
+        }
+    )
+
+
+def _jh_tunnel_stop(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    ok = app.tunnels.stop(h.alias, int(args[1]))
+    if not ok:
+        _jfail(f"Tunnel {args[1]} non attivo su {h.alias}")
+    _jprint({"alias": h.alias, "local_port": int(args[1]), "stopped": True})
+
+
+def _jh_stop_tunnels(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    n = app.tunnels.stop_all(h.alias)
+    _jprint({"alias": h.alias, "stopped": n})
+
+
+def _jh_tunnel_health(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    tunnels = _host_tunnels_payload(app, h)
+    active = [t for t in tunnels if t["active"]]
+    _jprint(
+        {
+            "alias": h.alias,
+            "configured": len(tunnels),
+            "active": len(active),
+            "tunnels": tunnels,
+        }
+    )
+
+
+# ---------- Rotazioni ----------
+
+
+def _jh_rotation_list(app, args, opts) -> None:
+    from .rotation import load_rotations
+
+    _jprint(
+        [
+            {
+                "name": r.name,
+                "entries": [{"host": h, "session": s} for h, s in r.unique_entries()],
+            }
+            for r in load_rotations(app._config)
+        ]
+    )
+
+
+def _jh_rotation_add(app, args, opts) -> None:
+    from .rotation import Rotation, add_rotation
+
+    name = args[0]
+    entries = []
+    for entry in args[1:]:
+        if ":" not in entry:
+            _jfail(f"Entry non valida (atteso host:sessione): '{entry}'")
+        host_ref, session = entry.split(":", 1)
+        entries.append((host_ref, session))
+    if not entries:
+        _jfail("Nessuna entry valida per la rotazione")
+    add_rotation(app._config, Rotation(name=name, entries=entries))
+    _jprint({"name": name, "entries": len(entries), "saved": True})
+
+
+def _jh_rotation_remove(app, args, opts) -> None:
+    from .rotation import remove_rotation
+
+    remove_rotation(app._config, args[0])
+    _jprint({"name": args[0], "removed": True})
+
+
+# ---------- File ----------
+
+
+def _jh_read_file(app, args, opts) -> None:
+    from .ssh import inspection
+
+    h = _cli_resolve_host(app, args[0])
+    _jprint(
+        _unwrap(
+            inspection.remote_read_file(
+                h,
+                app.ssh_cfg,
+                args[1],
+                offset=_opt_int(opts, "--offset", 1),
+                limit=_opt_int(opts, "--limit", 100),
+                timeout=_opt_int(opts, "--timeout", 30),
+            )
+        )
+    )
+
+
+def _jh_write_file(app, args, opts) -> None:
+    from .ssh import inspection
+
+    h = _cli_resolve_host(app, args[0])
+    _jprint(
+        _unwrap(
+            inspection.remote_write_file(
+                h,
+                app.ssh_cfg,
+                args[1],
+                args[2],
+                mode=_opt_str(opts, "--mode", "overwrite"),
+                timeout=_opt_int(opts, "--timeout", 30),
+            )
+        )
+    )
+
+
+def _jh_edit_file(app, args, opts) -> None:
+    from .ssh import inspection
+
+    h = _cli_resolve_host(app, args[0])
+    _jprint(
+        _unwrap(
+            inspection.remote_edit_file(
+                h,
+                app.ssh_cfg,
+                args[1],
+                pattern=_opt_str(opts, "--pattern"),
+                replacement=_opt_str(opts, "--replacement"),
+                timeout=_opt_int(opts, "--timeout", 30),
+            )
+        )
+    )
+
+
+def _jh_replace_block(app, args, opts) -> None:
+    from .ssh import inspection
+
+    h = _cli_resolve_host(app, args[0])
+    _jprint(
+        _unwrap(
+            inspection.replace_block(
+                h,
+                app.ssh_cfg,
+                args[1],
+                _opt_str(opts, "--old-text"),
+                _opt_str(opts, "--new-text"),
+                timeout=_opt_int(opts, "--timeout", 30),
+            )
+        )
+    )
+
+
+def _jh_project_tree(app, args, opts) -> None:
+    from .ssh import inspection
+
+    h = _cli_resolve_host(app, args[0])
+    _jprint(
+        _unwrap(
+            inspection.project_tree(
+                h,
+                app.ssh_cfg,
+                _opt_str(opts, "--path", ".") or ".",
+                max_depth=_opt_int(opts, "--max-depth", 3),
+                timeout=_opt_int(opts, "--timeout", 30),
+            )
+        )
+    )
+
+
+def _jh_search_files(app, args, opts) -> None:
+    from .ssh import inspection
+
+    h = _cli_resolve_host(app, args[0])
+    _jprint(
+        _unwrap(
+            inspection.remote_search_files(
+                h,
+                app.ssh_cfg,
+                path=_opt_str(opts, "--path", ".") or ".",
+                pattern=args[1],
+                timeout=_opt_int(opts, "--timeout", 30),
+            )
+        )
+    )
+
+
+def _jh_git_status(app, args, opts) -> None:
+    from .ssh import inspection
+
+    h = _cli_resolve_host(app, args[0])
+    _jprint(
+        _unwrap(
+            inspection.remote_git_status(
+                h,
+                app.ssh_cfg,
+                path=_opt_str(opts, "--path", ".") or ".",
+                timeout=_opt_int(opts, "--timeout", 30),
+            )
+        )
+    )
+
+
+# ---------- SFTP / trasferimento ----------
+
+
+def _jh_sftp_list(app, args, opts) -> None:
+    from .ssh import file_ops
+
+    h = _cli_resolve_host(app, args[0])
+    path = args[1] if len(args) > 1 else _opt_str(opts, "--path", ".")
+    res = file_ops.sftp_list(h, path or ".", app._password_for(h))
+    _jprint(
+        {"alias": h.alias, "path": path, "ok": res.ok, "stdout": res.stdout, "stderr": res.stderr}
+    )
+
+
+def _jh_sftp_download(app, args, opts) -> None:
+    from .ssh import file_ops
+
+    h = _cli_resolve_host(app, args[0])
+    res = file_ops.download(h, args[1], args[2], app._password_for(h))
+    _jprint(
+        {"alias": h.alias, "remote": args[1], "local": args[2], "ok": res.ok, "stderr": res.stderr}
+    )
+
+
+def _jh_sftp_upload(app, args, opts) -> None:
+    from .ssh import file_ops
+
+    h = _cli_resolve_host(app, args[0])
+    res = file_ops.upload(h, args[1], args[2], app._password_for(h))
+    _jprint(
+        {"alias": h.alias, "local": args[1], "remote": args[2], "ok": res.ok, "stderr": res.stderr}
+    )
+
+
+def _jh_sftp_get(app, args, opts) -> None:
+    from .ssh import file_ops
+
+    h = _cli_resolve_host(app, args[0])
+    res = file_ops.sftp_get(
+        h, args[1], args[2], app._password_for(h), recursive=bool(opts.get("--recursive"))
+    )
+    _jprint(
+        {"alias": h.alias, "remote": args[1], "local": args[2], "ok": res.ok, "stderr": res.stderr}
+    )
+
+
+def _jh_sftp_put(app, args, opts) -> None:
+    from .ssh import file_ops
+
+    h = _cli_resolve_host(app, args[0])
+    res = file_ops.sftp_put(
+        h, args[1], args[2], app._password_for(h), recursive=bool(opts.get("--recursive"))
+    )
+    _jprint(
+        {"alias": h.alias, "local": args[1], "remote": args[2], "ok": res.ok, "stderr": res.stderr}
+    )
+
+
+def _jh_sftp_mkdir(app, args, opts) -> None:
+    from .ssh import file_ops
+
+    h = _cli_resolve_host(app, args[0])
+    res = file_ops.sftp_mkdir(h, args[1], app._password_for(h))
+    _jprint({"alias": h.alias, "path": args[1], "ok": res.ok, "stderr": res.stderr})
+
+
+def _jh_sftp_rm(app, args, opts) -> None:
+    from .ssh import file_ops
+
+    h = _cli_resolve_host(app, args[0])
+    res = file_ops.sftp_rm(h, args[1], app._password_for(h))
+    _jprint({"alias": h.alias, "path": args[1], "ok": res.ok, "stderr": res.stderr})
+
+
+def _jh_sftp_rename(app, args, opts) -> None:
+    from .ssh import file_ops
+
+    h = _cli_resolve_host(app, args[0])
+    res = file_ops.sftp_rename(h, args[1], args[2], app._password_for(h))
+    _jprint({"alias": h.alias, "old": args[1], "new": args[2], "ok": res.ok, "stderr": res.stderr})
+
+
+def _jh_sftp_batch(app, args, opts) -> None:
+    from .ssh import file_ops
+
+    h = _cli_resolve_host(app, args[0])
+    res = file_ops.sftp_batch(h, args[1:], app._password_for(h))
+    _jprint(
+        {
+            "alias": h.alias,
+            "commands": args[1:],
+            "ok": res.ok,
+            "stdout": res.stdout,
+            "stderr": res.stderr,
+        }
+    )
+
+
+def _jh_transfer_file(app, args, opts) -> None:
+    import hashlib
+    import tempfile
+
+    from .ssh import file_ops
+
+    src = _cli_resolve_host(app, args[0])
+    dst = _cli_resolve_host(app, args[2])
+    with tempfile.TemporaryDirectory(prefix="bravoric-xfer-") as tmpdir:
+        tmp = Path(tmpdir) / Path(args[1]).name
+        down = file_ops.download(src, args[1], str(tmp), app._password_for(src))
+        if not down.ok:
+            _jfail(f"download fallito: {down.stderr.strip()}")
+        size = tmp.stat().st_size
+        md5 = hashlib.md5(tmp.read_bytes()).hexdigest()
+        up = file_ops.upload(dst, str(tmp), args[3], app._password_for(dst))
+        if not up.ok:
+            _jfail(f"upload fallito: {up.stderr.strip()}")
+    _jprint(
+        {
+            "src": f"{args[0]}:{args[1]}",
+            "dst": f"{args[2]}:{args[3]}",
+            "bytes": size,
+            "md5": md5,
+            "ok": True,
+        }
+    )
+
+
+def _jh_transfer_file_direct(app, args, opts) -> None:
+    from .ssh import file_ops
+
+    src = _cli_resolve_host(app, args[0])
+    dst = _cli_resolve_host(app, args[2])
+    res = file_ops.transfer_file_direct(
+        src, args[1], dst, args[3], app._password_for(src), app._password_for(dst)
+    )
+    _jprint(
+        {
+            "src": f"{args[0]}:{args[1]}",
+            "dst": f"{args[2]}:{args[3]}",
+            "ok": res.ok,
+            "stderr": res.stderr,
+        }
+    )
+
+
+# ---------- Comandi ----------
+
+
+def _jh_run_command(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    timeout = _opt_int(opts, "--timeout", 60)
+    res = ssh_adapter.run_tmux_action(h, args[1], app.ssh_cfg, timeout=timeout)
+    _jprint(
+        {
+            "alias": h.alias,
+            "ok": res.ok,
+            "exit_code": 0 if res.ok else 1,
+            "stdout": res.stdout or "",
+            "stderr": res.stderr or "",
+        }
+    )
+
+
+def _jh_run_command_all(app, args, opts) -> None:
+    from .ssh import broadcast
+
+    timeout = _opt_int(opts, "--timeout", 60)
+    results = broadcast.run_snippet_on_hosts(
+        app._config.hosts, args[0], app.ssh_cfg, timeout=timeout
+    )
+    _jprint(
+        [
+            {
+                "alias": r.host_alias,
+                "ok": r.ok,
+                "exit_code": r.exit_code,
+                "stdout": r.stdout,
+                "stderr": r.stderr,
+                "error": r.error,
+            }
+            for r in results
+        ]
+    )
+
+
+def _jh_run_command_many(app, args, opts) -> None:
+    from .ssh import broadcast
+
+    timeout = _opt_int(opts, "--timeout", 60)
+    aliases = [a.strip() for a in args[0].split(",") if a.strip()]
+    hosts = [_cli_resolve_host(app, a) for a in aliases]
+    results = broadcast.run_snippet_on_hosts(hosts, args[1], app.ssh_cfg, timeout=timeout)
+    _jprint(
+        [
+            {
+                "alias": r.host_alias,
+                "ok": r.ok,
+                "exit_code": r.exit_code,
+                "stdout": r.stdout,
+                "stderr": r.stderr,
+                "error": r.error,
+            }
+            for r in results
+        ]
+    )
+
+
+def _tmux_run_and_read(
+    app, host: Host, command: str, timeout: int, prefix: str
+) -> tuple[bool, str, str]:
+    """Esegue un comando in tmux detached e ne legge l'output pulito dal file."""
+    import time as _time
+
+    from .ssh.broadcast import run_snippet_on_host, session_slug
+
+    marker = f"__BRAVORIC_DONE_{int(_time.time() * 1000)}__"
+    name = session_slug(prefix, host.alias)
+    logfile = f"/tmp/{name}.log"
+    q = ssh_adapter._sh_quote
+    res = ssh_adapter.run_tmux_action(host, f"tmux new -d -s {q(name)}", app.ssh_cfg)
+    if not res.ok:
+        return False, "", (res.stderr or "").strip() or "creazione sessione fallita"
+    wrapped = f"{{ {command} ; }} > {q(logfile)} 2>&1 ; echo {q(marker)}"
+    ssh_adapter.run_tmux_action(host, f"tmux send-keys -t {q(name)} -l {q(wrapped)}", app.ssh_cfg)
+    ssh_adapter.run_tmux_action(host, f"tmux send-keys -t {q(name)} Enter", app.ssh_cfg)
+    done_line = marker.strip()
+    deadline = _time.time() + int(timeout)
+    while _time.time() < deadline:
+        cap = ssh_adapter.tmux_capture_pane(host, name, app.ssh_cfg, lines=200)
+        if any(ln.strip() == done_line for ln in (cap.stdout or "").splitlines()):
+            ssh_adapter.run_tmux_action(
+                host, f"tmux kill-session -t {q(name)} 2>/dev/null", app.ssh_cfg
+            )
+            read = run_snippet_on_host(
+                host, f"cat {q(logfile)} 2>/dev/null ; rm -f {q(logfile)}", app.ssh_cfg, timeout=30
+            )
+            return True, (read.stdout or "").strip(), ""
+        _time.sleep(1)
+    ssh_adapter.run_tmux_action(host, f"tmux kill-session -t {q(name)} 2>/dev/null", app.ssh_cfg)
+    run_snippet_on_host(host, f"rm -f {q(logfile)} 2>/dev/null", app.ssh_cfg, timeout=10)
+    return False, "", f"timeout dopo {timeout}s"
+
+
+def _jh_run_and_wait(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    timeout = _opt_int(opts, "--timeout", 300)
+    ok, output, error = _tmux_run_and_read(app, h, args[1], timeout, "wait")
+    _jprint({"alias": h.alias, "ok": ok, "error": error, "output": output})
+
+
+# ---------- Audit / log ----------
+
+
+def _jh_audit_list(app, args, opts) -> None:
+    from .ssh.audit import cfg_path_logs_dir
+
+    logs_dir = cfg_path_logs_dir(app._config)
+    files = []
+    try:
+        for p in sorted(logs_dir.glob("*.log.gz")):
+            st = p.stat()
+            files.append(
+                {"filename": p.name, "path": str(p), "size": st.st_size, "mtime": int(st.st_mtime)}
+            )
+    except OSError:
+        pass
+    _jprint(files)
+
+
+def _jh_audit_list_remote(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    cmd = "ls -la ~/.bravoric-ssh-client/logs/*.log.gz 2>/dev/null || true"
+    res = ssh_adapter.run_tmux_action(h, cmd, app.ssh_cfg, timeout=_opt_int(opts, "--timeout", 30))
+    files = [
+        ln.split()[-1] for ln in (res.stdout or "").splitlines() if ln.strip().endswith(".log.gz")
+    ]
+    _jprint({"alias": h.alias, "files": files})
+
+
+def _jh_read_audit_log(app, args, opts) -> None:
+    from .ssh.audit import cfg_path_logs_dir, read_log_gz
+
+    logs_dir = cfg_path_logs_dir(app._config)
+    path = Path(args[0])
+    if not path.is_absolute():
+        path = logs_dir / args[0]
+    if not path.exists():
+        _jfail(f"Log '{args[0]}' non trovato")
+    content = read_log_gz(path, max_lines=_opt_int(opts, "--max-lines", 0))
+    _jprint({"filename": path.name, "content": content})
+
+
+def _jh_read_remote_audit_log(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    q = ssh_adapter._sh_quote
+    max_lines = _opt_int(opts, "--max-lines", 0)
+    fname = args[1]
+    tail = f" | tail -n {max_lines}" if max_lines > 0 else ""
+    cmd = (
+        f"f=$(ls ~/.bravoric-ssh-client/logs/*{q(fname)}* 2>/dev/null | head -n1); "
+        f'if [ -n "$f" ]; then zcat "$f"{tail}; fi'
+    )
+    proc = ssh_adapter.run_tmux_action(h, cmd, app.ssh_cfg, timeout=_opt_int(opts, "--timeout", 60))
+    _jprint({"alias": h.alias, "filename": fname, "content": proc.stdout or ""})
+
+
+def _jh_session_audit_log(app, args, opts) -> None:
+    from .ssh import inspection
+
+    h = _cli_resolve_host(app, args[0])
+    _jprint(
+        _unwrap(
+            inspection.remote_session_audit_log(
+                h,
+                app.ssh_cfg,
+                args[1],
+                max_lines=_opt_int(opts, "--max-lines", 0),
+                timeout=_opt_int(opts, "--timeout", 60),
+            )
+        )
+    )
+
+
+def _jh_find_in_sessions(app, args, opts) -> None:
+    import re
+
+    h = _cli_resolve_host(app, args[0])
+    pattern = _opt_str(opts, "--pattern")
+    if not pattern:
+        _jfail("find-in-sessions richiede --pattern")
+    try:
+        rx = re.compile(pattern)
+    except re.error as exc:
+        _jfail(f"pattern non valido: {exc}")
+    res = ssh_adapter.list_tmux_sessions(h, app.ssh_cfg)
+    if not res.ok:
+        _jfail(res.error or "list-sessions fallito")
+    out = []
+    for session in res.sessions:
+        cap = ssh_adapter.tmux_capture_pane(h, session, app.ssh_cfg, lines=2000)
+        if not cap.ok:
+            continue
+        hits = [
+            {"line": i, "text": t[:500]}
+            for i, t in enumerate((cap.stdout or "").splitlines(), start=1)
+            if rx.search(t)
+        ]
+        if hits:
+            out.append({"session": session, "matches": hits[:50], "total": len(hits)})
+    _jprint(out)
+
+
+# ---------- Sistema ----------
+
+
+def _jh_packages(app, args, opts) -> None:
+    from .ssh import inspection
+
+    h = _cli_resolve_host(app, args[0])
+    pkgs = [p.strip() for p in args[2].split(",") if p.strip()]
+    _jprint(
+        _unwrap(
+            inspection.remote_manage_packages(
+                h, app.ssh_cfg, args[1], pkgs, timeout=_opt_int(opts, "--timeout", 300)
+            )
+        )
+    )
+
+
+def _jh_list_services(app, args, opts) -> None:
+    h = _cli_resolve_host(app, args[0])
+    cmd = (
+        "systemctl list-units --type=service --state=running --no-pager --no-legend "
+        "2>/dev/null | awk '{print $1}' | head -n 200 || true"
+    )
+    res = ssh_adapter.run_tmux_action(h, cmd, app.ssh_cfg, timeout=_opt_int(opts, "--timeout", 30))
+    services = [ln.strip() for ln in (res.stdout or "").splitlines() if ln.strip()]
+    _jprint({"alias": h.alias, "services": services})
+
+
+def _jh_service(app, args, opts) -> None:
+    from .ssh import inspection
+
+    h = _cli_resolve_host(app, args[0])
+    _jprint(
+        _unwrap(
+            inspection.remote_manage_service(
+                h,
+                app.ssh_cfg,
+                args[1],
+                action=_opt_str(opts, "--action", "status") or "status",
+                manager=_opt_str(opts, "--manager", "systemd") or "systemd",
+                timeout=_opt_int(opts, "--timeout", 30),
+            )
+        )
+    )
+
+
+def _jh_service_logs(app, args, opts) -> None:
+    from .ssh import inspection
+
+    h = _cli_resolve_host(app, args[0])
+    _jprint(
+        _unwrap(
+            inspection.remote_read_service_logs(
+                h,
+                app.ssh_cfg,
+                args[1],
+                lines=_opt_int(opts, "--lines", 100),
+                level=_opt_str(opts, "--level"),
+                grep=_opt_str(opts, "--grep"),
+                timeout=_opt_int(opts, "--timeout", 30),
+            )
+        )
+    )
+
+
+def _jh_sql(app, args, opts) -> None:
+    from .ssh import inspection
+
+    h = _cli_resolve_host(app, args[0])
+    query = args[1]
+    engine = _opt_str(opts, "--engine", "sqlite") or "sqlite"
+    db = _opt_str(opts, "--db", "") or ""
+    _jprint(
+        _unwrap(
+            inspection.remote_run_sql_query(
+                h,
+                app.ssh_cfg,
+                engine,
+                db,
+                query,
+                user=_opt_str(opts, "--user"),
+                password=_opt_str(opts, "--password"),
+                host_addr=_opt_str(opts, "--host-addr"),
+                timeout=_opt_int(opts, "--timeout", 60),
+            )
+        )
+    )
+
+
+# ---------- Agenti ----------
+
+
+def _jh_launch_agent(app, args, opts) -> None:
+    from .mcp_server import BravoricMcp
+
+    mcp = BravoricMcp(config=app._config)
+    raw = mcp.launch_agent(
+        agent=args[0],
+        path=args[1],
+        extra_args=_opt_str(opts, "--extra-args"),
+        title=_opt_str(opts, "--title"),
+        alias=_opt_str(opts, "--alias"),
+        wait_timeout=_opt_int(opts, "--wait-timeout", 25),
+        force=bool(opts.get("--force")),
+        prompt=_opt_str(opts, "--prompt"),
+    )
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        payload = {"ok": True, "raw": raw}
+    _jprint(payload)
+    if isinstance(payload, dict) and payload.get("ok") is False:
+        sys.exit(1)
+
+
+_JSON_HANDLERS = {
+    "--list-hosts": _jh_list_hosts,
+    "--host-info": _jh_host_info,
+    "--tmux-present": _jh_tmux_present,
+    "--ping": _jh_ping,
+    "--hosts-summary": _jh_hosts_summary,
+    "--status": _jh_status,
+    "--host-health": _jh_host_health,
+    "--host-network-ports": _jh_host_network_ports,
+    "--host-top-processes": _jh_host_top_processes,
+    "--list-sessions": _jh_list_sessions,
+    "--session-details": _jh_session_details,
+    "--create-session": _jh_create_session,
+    "--rename-session": _jh_rename_session,
+    "--kill-session": _jh_kill_session,
+    "--detach-clients": _jh_detach_clients,
+    "--kill-server": _jh_kill_server,
+    "--session-history": _jh_session_history,
+    "--pane-info": _jh_pane_info,
+    "--pane-command": _jh_pane_command,
+    "--pane-diff": _jh_pane_diff,
+    "--capture-pane": _jh_capture_pane,
+    "--copy-buffer": _jh_copy_buffer,
+    "--list-windows": _jh_list_windows,
+    "--new-window": _jh_new_window,
+    "--select-window": _jh_select_window,
+    "--rename-window": _jh_rename_window,
+    "--kill-window": _jh_kill_window,
+    "--send-text": _jh_send_text,
+    "--send-raw": _jh_send_raw,
+    "--send-file": _jh_send_file,
+    "--snippet-list": _jh_snippet_list,
+    "--snippet-add": _jh_snippet_add,
+    "--snippet-remove": _jh_snippet_remove,
+    "--snippet-run": _jh_snippet_run,
+    "--broadcast": _jh_broadcast,
+    "--broadcast-wait": _jh_broadcast_wait,
+    "--tunnel-list": _jh_tunnel_list,
+    "--tunnel-start": _jh_tunnel_start,
+    "--tunnel-stop": _jh_tunnel_stop,
+    "--stop-tunnels": _jh_stop_tunnels,
+    "--tunnel-health": _jh_tunnel_health,
+    "--rotation-list": _jh_rotation_list,
+    "--rotation-add": _jh_rotation_add,
+    "--rotation-remove": _jh_rotation_remove,
+    "--read-file": _jh_read_file,
+    "--write-file": _jh_write_file,
+    "--edit-file": _jh_edit_file,
+    "--replace-block": _jh_replace_block,
+    "--project-tree": _jh_project_tree,
+    "--search-files": _jh_search_files,
+    "--git-status": _jh_git_status,
+    "--sftp-list": _jh_sftp_list,
+    "--sftp-download": _jh_sftp_download,
+    "--sftp-upload": _jh_sftp_upload,
+    "--sftp-get": _jh_sftp_get,
+    "--sftp-put": _jh_sftp_put,
+    "--sftp-mkdir": _jh_sftp_mkdir,
+    "--sftp-rm": _jh_sftp_rm,
+    "--sftp-rename": _jh_sftp_rename,
+    "--sftp-batch": _jh_sftp_batch,
+    "--transfer-file": _jh_transfer_file,
+    "--transfer-file-direct": _jh_transfer_file_direct,
+    "--run-command": _jh_run_command,
+    "--run-command-all": _jh_run_command_all,
+    "--run-command-many": _jh_run_command_many,
+    "--run-and-wait": _jh_run_and_wait,
+    "--audit-list": _jh_audit_list,
+    "--audit-list-remote": _jh_audit_list_remote,
+    "--read-audit-log": _jh_read_audit_log,
+    "--read-remote-audit-log": _jh_read_remote_audit_log,
+    "--session-audit-log": _jh_session_audit_log,
+    "--find-in-sessions": _jh_find_in_sessions,
+    "--packages": _jh_packages,
+    "--list-services": _jh_list_services,
+    "--service": _jh_service,
+    "--service-logs": _jh_service_logs,
+    "--sql": _jh_sql,
+    "--launch-agent": _jh_launch_agent,
+}
+
+
+def _maybe_run_json_cli(argv: list[str]) -> bool:
+    """Esegue il comando JSON se presente. True se gestito."""
+    parsed = _parse_json_flags(argv)
+    if parsed is None:
+        return False
+    flag, args, opts, config_path = parsed
+    handler = _JSON_HANDLERS.get(flag)
+    if handler is None:
+        _jfail(f"Comando non implementato: {flag}")
+    app = _cli_app(config_path)
+    try:
+        handler(app, args, opts)
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001 - qualunque errore -> stderr + exit != 0
+        _jfail(str(exc))
+    return True
+
+
 def main(argv: list[str] | None = None) -> None:
     argv = argv if argv is not None else sys.argv[1:]
+    if _maybe_run_json_cli(argv):
+        return
     config_path = None
     attach_host = None
     attach_session = None
@@ -4502,7 +6145,17 @@ def main(argv: list[str] | None = None) -> None:
     if rotation_remove_name:
         _rotation_remove_cli(config_path, rotation_remove_name)
         return
-    app = BravoricApp(config_path=config_path, start_rotation=rotation_name, launch_agent=launch_agent, quick_launch=quick_launch)
+    # Flag sconosciuto: errore su stderr + exit != 0 (NON avviare la TUI).
+    unknown = [a for a in argv if a.startswith("-") and a not in _ALL_KNOWN_FLAGS]
+    if unknown:
+        print(f"Opzione sconosciuta: {unknown[0]}", file=sys.stderr)
+        sys.exit(2)
+    app = BravoricApp(
+        config_path=config_path,
+        start_rotation=rotation_name,
+        launch_agent=launch_agent,
+        quick_launch=quick_launch,
+    )
     if sftp_host_a and sftp_host_b:
         # modalità CLI: apre Midnight Commander sui due host (o locale+remoto)
         if app._config is None:

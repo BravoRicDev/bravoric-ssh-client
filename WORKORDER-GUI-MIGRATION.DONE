@@ -1,0 +1,100 @@
+# WORKORDER-GUI-MIGRATION — DONE
+
+Stato: **COMPLETATO**
+Repo: `/home/riccardo/Progetti/bravoric-ssh-client`
+File: `bravoric_ssh_client/app.py` (dispatch JSON in `main()`, PRIMA dell'avvio TUI)
+
+## Contratto rispettato
+- Output su **stdout**: JSON valido, **forma nuda** (nessun envelope `{"ok":...}`),
+  identica al tool MCP corrispondente.
+- Su errore: messaggio su **stderr** + **exit code != 0**.
+- **Flag sconosciuto**: `Opzione sconosciuta: <flag>` su stderr + exit 2 (NON avvia la TUI).
+- Argomenti posizionali come da workorder; opzioni `--nome valore`.
+- TUI **non modificata**.
+
+## Flag JSON implementati (78)
+
+### Host / diagnostica (9)
+`--list-hosts`, `--host-info`, `--tmux-present`, `--ping`, `--hosts-summary`,
+`--status`, `--host-health`, `--host-network-ports`, `--host-top-processes`
+
+### Sessioni tmux (8)
+`--list-sessions`, `--session-details`, `--create-session`, `--rename-session`,
+`--kill-session`, `--detach-clients`, `--kill-server`, `--session-history`
+
+### Pane / finestre (12)
+`--pane-info`, `--pane-command`, `--pane-diff`, `--capture-pane`, `--copy-buffer`,
+`--list-windows`, `--new-window`, `--select-window`, `--rename-window`,
+`--kill-window`, `--send-text`, `--send-raw`, `--send-file`
+
+### Snippet / broadcast (6)
+`--snippet-list`, `--snippet-add`, `--snippet-remove`, `--snippet-run`,
+`--broadcast`, `--broadcast-wait`
+
+### Tunnel (5)
+`--tunnel-list`, `--tunnel-start`, `--tunnel-stop`, `--stop-tunnels`, `--tunnel-health`
+
+### Rotazioni (3)
+`--rotation-list`, `--rotation-add`, `--rotation-remove`
+
+### File (7)
+`--read-file`, `--write-file`, `--edit-file`, `--replace-block`, `--project-tree`,
+`--search-files`, `--git-status`
+
+### SFTP / trasferimento (11)
+`--sftp-list`, `--sftp-download`, `--sftp-upload`, `--sftp-get`, `--sftp-put`,
+`--sftp-mkdir`, `--sftp-rm`, `--sftp-rename`, `--sftp-batch`, `--transfer-file`,
+`--transfer-file-direct`
+
+### Comandi (4)
+`--run-command`, `--run-command-all`, `--run-command-many`, `--run-and-wait`
+
+### Audit / log (6)
+`--audit-list`, `--audit-list-remote`, `--read-audit-log`, `--read-remote-audit-log`,
+`--session-audit-log`, `--find-in-sessions`
+
+### Sistema (5)
+`--packages`, `--list-services`, `--service`, `--service-logs`, `--sql`
+
+### Agenti (1)
+`--launch-agent`
+
+## Correzioni post-verifica (richieste dalla GUI)
+1. **`--ping`**: prima stampava testo libero (`tmux locale disponibile`). Ora emette
+   `{"ok": bool, "detail": "..."}` e esce != 0 su fallimento. Verificato con
+   `bravoric-ssh --ping localhost | python3 -m json.tool`.
+2. **`--list-services`**: ora stampa sempre JSON valido
+   (`{"alias": ..., "services": [...]}`), `[]` se nessun servizio.
+   Verificato con `bravoric-ssh --list-services localhost | python3 -m json.tool`.
+3. **Uniformità output**: rimossa l'inconsistenza envelope/nudo. I risultati dei tool
+   di `inspection` (che incapsulano in `{"ok": true, "data": ...}`) vengono ora
+   **scartati** con l'helper `_unwrap()`, emettendo il payload **nudo**; su
+   `ok/success == false` → stderr + exit != 0. Vale per `--host-health`,
+   `--host-network-ports`, `--host-top-processes`, `--read-file`, `--write-file`,
+   `--edit-file`, `--replace-block`, `--project-tree`, `--search-files`,
+   `--git-status`, `--session-audit-log`, `--packages`, `--service`,
+   `--service-logs`, `--sql`.
+
+## Test
+```
+python -m pytest tests/test_cli_gui_flags.py -q          -> 14 passed
+python -m pytest tests/test_cli_gui_flags.py tests/test_app.py tests/test_config.py \
+    tests/test_mcp_server.py tests/test_tunnels.py tests/test_history.py \
+    tests/test_host_management.py -q                     -> 90 passed
+```
+- Nuovo file di test: `tests/test_cli_gui_flags.py` (14 test): status, list-hosts,
+  host-info (ok/errore), snippet-list/add/remove, audit-list, session-history,
+  rotation-list, tunnel-list, ping (ok/fail), list-services, flag sconosciuto.
+
+### Fallimento preesistente (NON correlato)
+`tests/test_tmux_actions_ui.py::test_launch_agent_localhost` — la TUI ha 7 agenti
+configurati in `agents_config.toml`, il test ne attende 3. Già documentato
+nell'handoff; `app.py` TUI non è stato toccato da questo lavoro.
+
+## Flag non implementabili
+Nessuno. Tutti i flag del workorder sono implementati. Note operative:
+- `--list-services` usa `systemctl list-units --type=service --state=running`
+  (via `run_tmux_action`, quindi funziona anche su host locali).
+- `--audit-list-remote` legge `~/.bravoric-ssh-client/logs/*.log.gz` sul server.
+- `--launch-agent` delega a `mcp_server.BravoricMcp.launch_agent` ed emette il
+  suo JSON (con campo `ok`), uscendo != 0 se `ok == false`.
