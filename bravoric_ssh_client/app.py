@@ -65,6 +65,58 @@ async def _io(fn, *args, **kwargs):
 # Alias storico: quoting condiviso con il layer ssh.
 _sh_quote = sh_quote
 
+# Terminali GUI usati per aprire finestre esterne (attach, sftp, riapertura).
+# Ordine di rilevamento automatico: il primo trovato nel PATH viene usato.
+# La variabile d'ambiente BRAVORIC_TERMINAL sovrascrive tutto
+# (utile per scegliere un emulatore specifico, es. kitty per l'avatar immagine).
+_TERMINALS_DEFAULT = ("kitty", "ptyxis", "gnome-terminal", "konsole", "alacritty")
+
+
+def find_gui_terminal() -> str | None:
+    """Percorso del terminale GUI da usare per aprire una finestra.
+
+    Ordine: la variabile BRAVORIC_TERMINAL (nome nel PATH oppure percorso
+    eseguibile), poi ptyxis, poi gnome-terminal, konsole, alacritty.
+    Restituisce None se non ne trova nessuno.
+    """
+    override = os.environ.get("BRAVORIC_TERMINAL", "").strip()
+    if override:
+        found = shutil.which(override)
+        if not found:
+            # un percorso esplicito non passa dal PATH
+            try:
+                candidate = Path(override).expanduser()
+                if candidate.is_file() and os.access(candidate, os.X_OK):
+                    found = str(candidate)
+            except OSError:
+                found = None
+        if found:
+            return found
+    for name in _TERMINALS_DEFAULT:
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
+def terminal_argv(terminal: str, inner: str) -> list[str]:
+    """Argv per far eseguire al terminale ``terminal`` il comando shell ``inner``.
+
+    Ogni emulatore vuole una sintassi diversa:
+      ptyxis / kgx    -> -x "sh -c '<cmd>'"   (il comando come UNA stringa)
+      kitty           -> sh -c '<cmd>'        (programma, senza flag di exec)
+      gnome-terminal  -> -- sh -c '<cmd>'
+      konsole / xterm -> -e sh -c '<cmd>'
+    """
+    name = os.path.basename(terminal)
+    if name in ("ptyxis", "kgx"):
+        return [terminal, "-x", f"sh -c {_sh_quote(inner)}"]
+    if name == "kitty":
+        return [terminal, "sh", "-c", inner]
+    if name == "gnome-terminal":
+        return [terminal, "--", "sh", "-c", inner]
+    return [terminal, "-e", "sh", "-c", inner]
+
 
 class BravoricApp(App):
     """App principale: gestisce configurazione e navigazione tra schermate."""
@@ -708,7 +760,6 @@ class RecentScreen(BravoricScreen):
 
     async def _reopen_all_worker(self) -> None:
         import asyncio
-        import shutil
 
         unique: dict[str, tuple[str, str]] = {}
         for e in self._entries:
@@ -717,18 +768,18 @@ class RecentScreen(BravoricScreen):
         if not unique:
             self.app.notify("Nessuna sessione da riaprire")
             return
-        ptyxis = shutil.which("ptyxis") or shutil.which("gnome-terminal")
+        terminal = find_gui_terminal()
         wrap = str(Path.home() / ".local" / "bin" / "bravoric-ssh")
         launched = 0
         for host_alias, session in unique.values():
-            if ptyxis:
+            if terminal:
                 import subprocess
 
                 try:
-                    # ptyxis -x vuole il comando come UNA stringa; eseguita via shell
-                    cmd = f"sh -c {_sh_quote(f'exec {_sh_quote(wrap)} --attach {_sh_quote(host_alias)} {_sh_quote(session)}')}"
+                    # sintassi per-terminale: vedi terminal_argv()
+                    inner = f"exec {_sh_quote(wrap)} --attach {_sh_quote(host_alias)} {_sh_quote(session)}"
                     subprocess.Popen(
-                        [ptyxis, "-x", cmd],
+                        terminal_argv(terminal, inner),
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
                     )
@@ -1087,16 +1138,16 @@ class SftpTargetScreen(BravoricScreen):
                 timeout=8,
             )
             return
-        ptyxis = shutil.which("ptyxis") or shutil.which("gnome-terminal")
+        terminal = find_gui_terminal()
         wrap = str(Path.home() / ".local" / "bin" / "bravoric-ssh")
-        if not ptyxis:
+        if not terminal:
             self.app.notify("Nessun terminale GUI trovato; apri mc manualmente", severity="error")
             return
-        # ptyxis -x esegue il PRIMO token come eseguibile: serve "sh -c '<comando unico>'".
-        cmd = f"sh -c {_sh_quote(f'exec {_sh_quote(wrap)} --sftp {_sh_quote(host_a.alias)} {_sh_quote(host_b.alias)}')}"
+        # il comando va eseguito via shell: la forma esatta dipende dal terminale
+        inner = f"exec {_sh_quote(wrap)} --sftp {_sh_quote(host_a.alias)} {_sh_quote(host_b.alias)}"
         try:
             subprocess.Popen(
-                [ptyxis, "-x", cmd],
+                terminal_argv(terminal, inner),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
@@ -1551,7 +1602,6 @@ class RotationCatalogScreen(BravoricScreen):
 
     async def _reopen_all_rotations_worker(self) -> None:
         import asyncio
-        import shutil
 
         unique: dict[str, tuple[str, str]] = {}
         for r in self._rotations:
@@ -1561,18 +1611,18 @@ class RotationCatalogScreen(BravoricScreen):
         if not unique:
             self.app.notify("Nessuna sessione da riaprire")
             return
-        ptyxis = shutil.which("ptyxis") or shutil.which("gnome-terminal")
+        terminal = find_gui_terminal()
         wrap = str(Path.home() / ".local" / "bin" / "bravoric-ssh")
         launched = 0
         for host_alias, session in unique.values():
-            if ptyxis:
+            if terminal:
                 import subprocess
 
                 try:
-                    # ptyxis -x vuole il comando come UNA stringa; eseguita via shell
-                    cmd = f"sh -c {_sh_quote(f'exec {_sh_quote(wrap)} --attach {_sh_quote(host_alias)} {_sh_quote(session)}')}"
+                    # sintassi per-terminale: vedi terminal_argv()
+                    inner = f"exec {_sh_quote(wrap)} --attach {_sh_quote(host_alias)} {_sh_quote(session)}"
                     subprocess.Popen(
-                        [ptyxis, "-x", cmd],
+                        terminal_argv(terminal, inner),
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
                     )
