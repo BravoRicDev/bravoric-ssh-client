@@ -203,11 +203,41 @@ def _tmux_with_title(host_alias: str, tmux_cmd: str) -> str:
     )
 
 
+# Preambolo POSIX-sh che rende bravoric AGNOSTICO al terminale del server.
+#
+# Il terminale locale può esportare un TERM che il server non conosce: il caso tipico
+# è kitty, che esporta ``xterm-kitty`` e la cui voce terminfo non è installata di
+# default sui server. In quel caso tmux non riesce a partire e la connessione muore
+# con "missing or unsuitable terminal: xterm-kitty". Non possiamo sapere in anticipo
+# cosa ha il server, quindi lo scopriamo al volo: se il TERM corrente non è
+# utilizzabile ripieghiamo sul primo della lista che lo è. La lista è ordinata per
+# capacità decrescente (256 colori -> base -> vt100), così la sessione si apre
+# comunque, con la resa migliore disponibile.
+_TERM_GUARD = (
+    'for _bt in "$TERM" xterm-256color xterm screen tmux-256color tmux vt100; do '
+    "_bt_ok=; "
+    "if command -v infocmp >/dev/null 2>&1; then "
+    'infocmp "$_bt" >/dev/null 2>&1 && _bt_ok=1; '
+    "else "
+    'for _bd in "$HOME/.terminfo" /usr/share/terminfo /lib/terminfo /etc/terminfo; do '
+    '[ -e "$_bd/${_bt%${_bt#?}}/$_bt" ] && _bt_ok=1; '
+    "done; fi; "
+    'if [ -n "$_bt_ok" ]; then [ "$_bt" = "$TERM" ] || { TERM=$_bt; export TERM; }; break; fi; '
+    "done; unset _bt _bt_ok _bd 2>/dev/null"
+)
+
+
 def _tmux_wrap_full(host_alias: str, body: str) -> str:
     """Come ``_tmux_with_title`` ma ``body`` è un comando shell COMPLETO
-    (i singoli ``tmux ...`` sono già espliciti; serve per pipe-pane+attach)."""
+    (i singoli ``tmux ...`` sono già espliciti; serve per pipe-pane+attach).
+
+    Il comando inizia con ``_TERM_GUARD``: bravoric non può sapere quale database
+    terminfo ha il server, quindi adatta il TERM invece di pretendere che conosca
+    quello del terminale locale.
+    """
     t = _sh_quote(f"{host_alias} - #S")
     return (
+        f"{_TERM_GUARD}; "
         "t=$(tmux show -gv set-titles-string 2>/dev/null); "
         f"tmux set -g set-titles-string {t} >/dev/null 2>&1; "
         f"{body}; "

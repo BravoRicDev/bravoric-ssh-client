@@ -16,6 +16,7 @@ Questi test bloccano la regressione su:
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -189,3 +190,63 @@ def test_senza_restart_esegue_comando_invariato(monkeypatch):
 
     tmux_runner._run_or_exec(["ssh", "-t", "h"], None, None)
     assert seen["argv"] == ["ssh", "-t", "h"]
+
+
+# --- 7. adattamento del TERM (agnostico al terminale del server) -------------
+
+
+def _term_dopo_il_guard(term: str) -> str:
+    """Esegue davvero il preambolo in /bin/sh e ritorna il TERM risultante."""
+    script = f'{tmux_runner._TERM_GUARD}; printf %s "$TERM"'
+    res = subprocess.run(
+        ["/bin/sh", "-c", script],
+        env={**os.environ, "TERM": term},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return res.stdout
+
+
+def test_term_guard_sostituisce_term_sconosciuto():
+    """Un TERM che il server non conosce (es. xterm-kitty senza terminfo) deve
+    essere rimpiazzato con uno utilizzabile: senza questo tmux muore con
+    'missing or unsuitable terminal' e la finestra non mostra la sessione."""
+    out = _term_dopo_il_guard("term-inesistente-xyz")
+    assert out in (
+        "xterm-256color",
+        "xterm",
+        "screen",
+        "tmux-256color",
+        "tmux",
+        "vt100",
+    ), out
+    assert out != "term-inesistente-xyz"
+
+
+def test_term_guard_lascia_intatto_term_valido():
+    """Se il TERM corrente e' utilizzabile non va toccato: nessun downgrade inutile."""
+    assert _term_dopo_il_guard("xterm-256color") == "xterm-256color"
+
+
+def test_term_guard_e_esportato():
+    """Il TERM scelto deve essere esportato, altrimenti tmux (processo figlio)
+    continuerebbe a vedere quello sbagliato."""
+    script = f"{tmux_runner._TERM_GUARD}; sh -c 'printf %s \"$TERM\"'"
+    res = subprocess.run(
+        ["/bin/sh", "-c", script],
+        env={**os.environ, "TERM": "term-inesistente-xyz"},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert res.stdout != "term-inesistente-xyz"
+    assert res.stdout in ("xterm-256color", "xterm", "screen", "tmux-256color", "tmux", "vt100")
+
+
+def test_attach_cmd_include_il_guard(host: Host):
+    """Il comando di attach deve portarsi dietro il preambolo di adattamento."""
+    for base in ("attach", "attach -r"):
+        cmd = tmux_runner._attach_cmd(host, "sess", base, None)
+        assert "for _bt in" in cmd, base
+        assert "export TERM" in cmd, base
