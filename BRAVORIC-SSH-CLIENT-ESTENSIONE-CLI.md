@@ -127,7 +127,7 @@
 | Azione | Tasto | Descrizione |
 |--------|-------|-------------|
 | Rientra nella sessione | `Enter` | Apre SessionScreen dell'host |
-| Riapri tutte | `a` | Apre tutte le sessioni recenti in finestre separate (ptyxis/gnome-terminal) |
+| Riapri tutte | `a` | Apre tutte le sessioni recenti in finestre separate (kitty/ptyxis/gnome-terminal) |
 | Indietro | `Esc` / `q` | Torna a HostScreen |
 
 ### 1.11 RotationCatalogScreen — Catalogo rotazioni

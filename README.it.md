@@ -66,7 +66,8 @@ niente da installare sui server.
 - `tmux` sui server gestiti (e in locale per gli host locali)
 - opzionale: `mc` (Midnight Commander) per la vista di scambio file
 - opzionale: `script` (util-linux) per registrare le shell SSH
-- opzionale: `ptyxis` / `gnome-terminal` per aprire le sessioni in finestre separate
+- opzionale: `kitty` / `ptyxis` / `gnome-terminal` per aprire le sessioni in finestre separate
+  - `kitty` viene rilevato automaticamente (non serve `BRAVORIC_TERMINAL`); abilita anche il renderer kitty-unicode per l'avatar di pi-emote se `TERM_PROGRAM=kitty` e' impostato in kitty.conf
 
 ## Installazione
 

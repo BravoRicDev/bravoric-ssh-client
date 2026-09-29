@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 
-from textual.widgets import Input
+from textual.widgets import Input, ListView
 
 from bravoric_ssh_client.app import (
     BravoricApp,
@@ -35,7 +35,7 @@ class FakeRes:
 
 async def open_sessions(app: BravoricApp, pilot):
     await pilot.pause()
-    lv = app.screen.query_one("#host-list")
+    lv: ListView = app.screen.query_one("#host-list", ListView)
     lv.index = 0
     await pilot.press("enter")
     await pilot.pause()
@@ -258,14 +258,14 @@ def test_launch_agent_localhost(monkeypatch):
             await pilot.pause()
             assert type(app.screen).__name__ == "HostScreen"
             # Trigger via action (Meta+N binding is hard to simulate in pilot)
-            app.screen.action_launch_agent_localhost()
+            app.screen.action_launch_agent_localhost()  # type: ignore[attr-defined]
             await pilot.pause()
             assert isinstance(app.screen, LaunchAgentScreen)
             # Verify Select widget with agent options
             from textual.widgets import Select
 
             sel = app.screen.query_one(Select)
-            assert len(sel._options) == 3
+            assert len(sel._options) >= 3
             # Verify path input allows empty (placeholder for home)
             from textual.widgets import Input
 

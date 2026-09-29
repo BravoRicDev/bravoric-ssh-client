@@ -61,7 +61,8 @@ responsive. No external services, nothing to install on your servers.
 - `tmux` on the servers you manage (and locally for local hosts)
 - Optional: `mc` (Midnight Commander) for the file-exchange view
 - Optional: `script` (util-linux) to record plain SSH shells
-- Optional: `ptyxis` / `gnome-terminal` to open sessions in separate windows
+- Optional: `kitty` / `ptyxis` / `gnome-terminal` to open sessions in separate windows
+  - `kitty` is detected automatically (no `BRAVORIC_TERMINAL` needed); it also enables the kitty-unicode avatar renderer in pi-emote when `TERM_PROGRAM=kitty` is set in kitty.conf
 
 ## Installation
 

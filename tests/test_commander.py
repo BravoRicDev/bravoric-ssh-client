@@ -12,6 +12,8 @@ import pytest
 from bravoric_ssh_client.config import Config, Host
 from bravoric_ssh_client.ssh import commander
 
+from textual.widgets import ListView
+
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only shell/exec paths")
 
 
@@ -154,11 +156,15 @@ def test_main_sftp_cli_builds_env_and_execs(monkeypatch, tmp_path: Path):
 
 
 def test_sftp_target_screen_launches_ptyxis(monkeypatch):
+    """Il ramo ptyxis/kgx: il comando viaggia come UNA stringa `sh -c '...'`."""
     import subprocess as sp
 
+    import bravoric_ssh_client.app as app_module
     from bravoric_ssh_client.app import BravoricApp, SftpTargetScreen
 
     monkeypatch.setattr(commander, "mc_available", lambda: True)
+    # Terminale forzato: il test non deve dipendere da cosa e' installato qui.
+    monkeypatch.setattr(app_module, "find_gui_terminal", lambda: "/usr/bin/ptyxis")
     cfg = Config()
     cfg.hosts = [_host(), _host(alias="beta", hostname="10.0.0.2", user="b")]
     popen_calls = []
@@ -176,7 +182,7 @@ def test_sftp_target_screen_launches_ptyxis(monkeypatch):
         app = BravoricApp(config=cfg)
         async with app.run_test(size=(120, 35)) as pilot:
             await pilot.pause()
-            lv = app.screen.query_one("#host-list")
+            lv = app.screen.query_one("#host-list", ListView)
             lv.index = 0
             await pilot.press("F")
             await pilot.pause(0.3)
@@ -198,12 +204,15 @@ def test_sftp_target_screen_launches_ptyxis(monkeypatch):
     asyncio.run(run())
 
 
-def test_sftp_target_screen_remote_second(monkeypatch):
+def test_sftp_target_screen_launches_kitty(monkeypatch):
+    """Il ramo kitty: il comando arriva come argv (programma, senza flag di exec)."""
     import subprocess as sp
 
-    from bravoric_ssh_client.app import BravoricApp
+    import bravoric_ssh_client.app as app_module
+    from bravoric_ssh_client.app import BravoricApp, SftpTargetScreen
 
     monkeypatch.setattr(commander, "mc_available", lambda: True)
+    monkeypatch.setattr(app_module, "find_gui_terminal", lambda: "/usr/bin/kitty")
     cfg = Config()
     cfg.hosts = [_host(), _host(alias="beta", hostname="10.0.0.2", user="b")]
     popen_calls = []
@@ -221,7 +230,54 @@ def test_sftp_target_screen_remote_second(monkeypatch):
         app = BravoricApp(config=cfg)
         async with app.run_test(size=(120, 35)) as pilot:
             await pilot.pause()
-            lv = app.screen.query_one("#host-list")
+            lv = app.screen.query_one("#host-list", ListView)
+            lv.index = 0
+            await pilot.press("F")
+            await pilot.pause(0.3)
+            assert isinstance(app.screen, SftpTargetScreen)
+            await pilot.press("enter")  # seleziona "Locale"
+            await pilot.pause(0.4)
+            assert popen_calls, "nessuna finestra kitty aperta"
+            args = popen_calls[0]
+            # kitty vuole `kitty sh -c <cmd>`: niente -x, niente stringa unica
+            assert "kitty" in args[0]
+            assert args[1] == "sh"
+            assert args[2] == "-c"
+            assert "exec " in args[3]
+            assert "--sftp" in args[3]
+            assert "alpha" in args[3] and "locale" in args[3]
+            await pilot.press("q")
+            await pilot.pause()
+
+    asyncio.run(run())
+
+
+def test_sftp_target_screen_remote_second(monkeypatch):
+    import subprocess as sp
+
+    import bravoric_ssh_client.app as app_module
+    from bravoric_ssh_client.app import BravoricApp
+
+    monkeypatch.setattr(commander, "mc_available", lambda: True)
+    monkeypatch.setattr(app_module, "find_gui_terminal", lambda: "/usr/bin/ptyxis")
+    cfg = Config()
+    cfg.hosts = [_host(), _host(alias="beta", hostname="10.0.0.2", user="b")]
+    popen_calls = []
+
+    class FakeProc:
+        pass
+
+    def fake_popen(args, **kw):
+        popen_calls.append(args)
+        return FakeProc()
+
+    monkeypatch.setattr(sp, "Popen", fake_popen)
+
+    async def run():
+        app = BravoricApp(config=cfg)
+        async with app.run_test(size=(120, 35)) as pilot:
+            await pilot.pause()
+            lv = app.screen.query_one("#host-list", ListView)
             lv.index = 0
             await pilot.press("F")
             await pilot.pause(0.3)
