@@ -204,7 +204,11 @@ def test_audit_script_wrap(tmp_path: Path):
 
 def test_audit_pipe_pane():
     on = audit.tmux_pipe_pane_enable("sess", Path("/tmp/x.log.gz"))
-    assert "pipe-pane" in on and "gzip -c >>" in on
+    assert "pipe-pane" in on
+    assert "gzip -c" in on
+    # il writer e' LIMITATO: senza tetto il log di una sessione lunga cresce senza fine
+    assert f"head -c {audit.MAX_LOG_BYTES}" in on
+    assert "/tmp/x.log.gz" in on
     off = audit.tmux_pipe_pane_disable("sess")
     assert "pipe-pane -t 'sess'" in off
 
@@ -239,7 +243,8 @@ def test_tmux_attach_audit_local(monkeypatch, tmp_path: Path):
     assert calls
     joined = " ".join(calls[0])
     assert "pipe-pane" in joined  # pipe-pane registra l'I/O della sessione
-    assert "gzip -c >>" in joined
+    assert "gzip -c" in joined
+    assert f"head -c {audit.MAX_LOG_BYTES}" in joined  # writer limitato
     assert out.name in joined  # il file target è il .gz locale
 
 

@@ -22,6 +22,69 @@ from pathlib import Path
 from ..config import Config
 from .shellutil import sh_quote
 
+# Tetti dell'audit. Senza di essi il log di una sessione lunga cresce senza fine:
+# sul campo si e' visto un singolo file da 5 GB e ~14 GB complessivi nella cartella,
+# perche' il writer e' uno stream gzip mai chiuso e non c'era alcuna pulizia.
+MAX_LOG_BYTES = 64 * 1024 * 1024  # tetto per singolo file (compresso)
+MAX_TOTAL_BYTES = 1024 * 1024 * 1024  # budget complessivo della cartella
+MAX_AGE_DAYS = 30  # eta' massima di un log
+
+
+def _unlink(path: Path) -> bool:
+    """Rimuove un file; True se e' stato rimosso davvero."""
+    try:
+        path.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def prune_logs(
+    logs_dir: Path,
+    *,
+    max_total_bytes: int = MAX_TOTAL_BYTES,
+    max_age_days: int = MAX_AGE_DAYS,
+    keep: Path | None = None,
+) -> list[Path]:
+    """Tiene la cartella dei log entro un budget, rimuovendo i file piu' vecchi.
+
+    Due criteri, in ordine: prima i file piu' vecchi di ``max_age_days``, poi —
+    se il totale supera ancora ``max_total_bytes`` — si continua a eliminare dal
+    piu' vecchio finche' il budget e' rispettato. ``keep`` (il file che si sta per
+    scrivere) non viene mai toccato. Ritorna i file rimossi.
+    """
+    import time
+
+    try:
+        candidates = [p for p in logs_dir.iterdir() if p.is_file() and p != keep]
+    except OSError:
+        return []
+
+    entries: list[tuple[float, int, Path]] = []
+    for p in candidates:
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        entries.append((st.st_mtime, st.st_size, p))
+    entries.sort()  # i piu' vecchi per primi
+
+    removed: list[Path] = []
+    cutoff = time.time() - max_age_days * 86400
+    for mtime, _size, p in list(entries):
+        if mtime < cutoff and _unlink(p):
+            removed.append(p)
+            entries.remove((mtime, _size, p))
+
+    total = sum(size for _mtime, size, _p in entries)
+    for _mtime, size, p in entries:
+        if total <= max_total_bytes:
+            break
+        if _unlink(p):
+            removed.append(p)
+            total -= size
+    return removed
+
 
 def default_logs_dir() -> Path:
     """~/.local/share/bravoric-ssh-client/logs (XDG data dir)."""
@@ -37,13 +100,20 @@ def _sanitize(name: str) -> str:
 
 
 def audit_log_path(cfg: Config, host_alias: str, session: str | None = None) -> Path:
-    """Percorso del file di log compresso per la sessione."""
+    """Percorso del file di log compresso per la sessione.
+
+    Prima di restituirlo applica la retention: la cartella dei log non deve poter
+    riempire il disco, quindi a ogni nuova registrazione i file piu' vecchi (o
+    eccedenti il budget) vengono rimossi. Il file che stiamo per scrivere e' protetto.
+    """
     import datetime
 
     logs_dir = cfg_path_logs_dir(cfg)
     date = datetime.datetime.now().strftime("%Y%m%d")
     tail = _sanitize(session) if session else "shell"
-    return logs_dir / f"{date}_{_sanitize(host_alias)}_{tail}.log.gz"
+    out = logs_dir / f"{date}_{_sanitize(host_alias)}_{tail}.log.gz"
+    prune_logs(logs_dir, keep=out)
+    return out
 
 
 def cfg_path_logs_dir(cfg: Config) -> Path:
@@ -83,10 +153,17 @@ def script_wrap(command: str, out_gz: Path) -> str:
 
 
 def tmux_pipe_pane_enable(session: str, out_gz: Path) -> str:
-    """Comando tmux che inizia a registrare la sessione su un gz via gzip."""
+    """Comando tmux che inizia a registrare la sessione su un gz via gzip.
+
+    Il writer e' limitato a ``MAX_LOG_BYTES``: ``head -c`` chiude il flusso quando
+    il tetto e' raggiunto, cosi' un singolo file non puo' piu' crescere senza limite.
+    L'intero comando interno passa da ``sh_quote``: prima veniva composto a mano
+    infilando un percorso gia' quotato dentro altri apici, cosa che si rompe se il
+    percorso contiene un apice.
+    """
     target = sh_quote(session)
-    log = sh_quote(str(out_gz))
-    return f"tmux pipe-pane -o -t {target} 'gzip -c >> {log}'"
+    inner = f"gzip -c | head -c {MAX_LOG_BYTES} >> {sh_quote(str(out_gz))}"
+    return f"tmux pipe-pane -o -t {target} {sh_quote(inner)}"
 
 
 def tmux_pipe_pane_disable(session: str) -> str:
