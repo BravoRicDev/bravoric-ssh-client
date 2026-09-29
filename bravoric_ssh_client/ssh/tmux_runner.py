@@ -283,26 +283,29 @@ def _exec_audited(
 def _audit_pipe_cmds(host: Host, session: str, out_gz: Path) -> tuple[str, str]:
     """Comandi shell per registrare la sessione in un gz via pipe-pane.
 
-    Ritorna (enable, disable). ``enable`` crea la directory e inizia il pipe
-    ``gzip -c >> file`` sul server tmux; ``disable`` lo chiude al detach.
+    Ritorna (enable, disable). ``enable`` prepara la cartella dei log, applica la
+    retention e avvia il pipe; ``disable`` lo chiude al detach.
 
     - host locale: il file è il percorso locale ``out_gz`` (log su questa macchina).
     - host remoto: scrive su ``~/.bravoric-ssh-client/logs/<nome>.log.gz`` del server
-      (dove gira tmux).
+      (dove gira tmux). Anche lì serve la retention: ``prune_logs`` gira dove gira il
+      client, quindi i log remoti crescevano senza limite.
     """
-    from .audit import tmux_pipe_pane_disable, tmux_pipe_pane_enable
+    from .audit import (
+        PRUNE_REMOTE,
+        tmux_pipe_pane_disable,
+        tmux_pipe_pane_enable,
+        tmux_pipe_pane_enable_remote,
+    )
 
     esc = session.replace("'", "'\\''")
     if host.is_local():
-        log = str(out_gz)
         mkdir = f"mkdir -p {_sh_quote(str(out_gz.parent))}"
         pipe = tmux_pipe_pane_enable(esc, out_gz)
     else:
-        remote_dir = "$HOME/.bravoric-ssh-client/logs"
-        log = f"{remote_dir}/{out_gz.name}"
-        mkdir = f"mkdir -p {remote_dir}"
         # il gzip gira sul server: $HOME va lasciato espandere (non quotato)
-        pipe = f"tmux pipe-pane -o -t {_sh_quote(esc)} 'gzip -c >> {log}'"
+        mkdir = PRUNE_REMOTE
+        pipe = tmux_pipe_pane_enable_remote(esc, out_gz.name)
     enable = f"{mkdir} && {pipe}"
     disable = tmux_pipe_pane_disable(esc)
     return enable, disable

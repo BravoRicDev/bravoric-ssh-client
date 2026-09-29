@@ -1,10 +1,14 @@
-"""Test sui tetti dell'audit: la cartella dei log non deve poter riempire il disco.
+"""Test sui tetti dell'audit: la cartella dei log non deve riempire il disco.
 
 Sul campo si era arrivati a ~14 GB con un singolo file da 5 GB: il writer era uno
 stream gzip mai chiuso e non esisteva alcuna retention. Questi test bloccano la
-regressione su due fronti:
-  - il writer tmux e' limitato a MAX_LOG_BYTES;
-  - la cartella viene potata (per eta' e per budget) prima di ogni nuova scrittura.
+regressione su tre fronti:
+  - il writer tmux e' ``exec gzip``, senza pipeline: cosi' tmux parla direttamente
+    col writer e non restano orfani (un orfano tiene aperto l'inode di un file
+    cancellato, quindi la retention non libererebbe davvero lo spazio);
+  - il writer non riapre un file che ha gia' raggiunto MAX_LOG_BYTES;
+  - la cartella viene potata per eta' e budget in locale, e per eta' e numero di file
+    sul server (dove ``prune_logs`` non puo' girare).
 """
 
 from __future__ import annotations
@@ -18,12 +22,17 @@ from bravoric_ssh_client.ssh import audit
 # --- cap del writer ---------------------------------------------------------
 
 
-def test_pipe_pane_limita_la_dimensione(tmp_path: Path):
+def test_pipe_pane_writer_senza_pipeline(tmp_path: Path):
+    """Il writer deve essere ``exec gzip``: una pipeline lascerebbe gzip orfano
+    quando tmux termina la shell, e un orfano impedisce di liberare lo spazio."""
+    import shlex
+
     cmd = audit.tmux_pipe_pane_enable("sess", tmp_path / "a.log.gz")
-    assert "head -c" in cmd
-    assert str(audit.MAX_LOG_BYTES) in cmd
-    assert "gzip -c" in cmd
-    # -o: non aprire un secondo pipe se ce n'e' gia' uno
+    inner = shlex.split(cmd)[-1]
+    assert "exec gzip" in inner
+    # `||` (fallback) e' ammesso: una pipe no
+    assert "|" not in inner.replace("||", ""), "una pipeline lascerebbe orfani"
+    assert str(audit.MAX_LOG_BYTES) in inner  # controllo di dimensione all'apertura
     assert "pipe-pane -o" in cmd
 
 
@@ -50,19 +59,61 @@ def test_pipe_pane_quota_correttamente_percorsi_strani(tmp_path: Path):
     assert weird.stat().st_size > 0
 
 
-def test_writer_si_ferma_al_tetto(tmp_path: Path):
-    """Con un tetto piccolo il file non cresce oltre (il writer esce da solo)."""
+def test_writer_non_riapre_un_file_pieno(tmp_path: Path):
+    """Se il log ha gia' raggiunto il tetto il writer esce senza scrivere: il file
+    non puo' ricominciare a crescere a ogni attach."""
     import shlex
     import subprocess
 
-    target = tmp_path / "cap.log.gz"
-    inner = f"gzip -c | head -c 1024 >> {shlex.quote(str(target))}"
-    # 100 KiB di input, tetto 1 KiB: head deve troncare
+    target = tmp_path / "pieno.log.gz"
+    target.write_bytes(b"z" * 100)
+    cmd = audit.tmux_pipe_pane_enable("sess", target)
+    # tetto abbassato sotto la dimensione attuale, solo per la prova
+    inner = shlex.split(cmd)[-1].replace(str(audit.MAX_LOG_BYTES), "50")
+    before = target.stat().st_size
     res = subprocess.run(
-        ["/bin/sh", "-c", inner], input=b"B" * (100 * 1024), capture_output=True, check=False
+        ["/bin/sh", "-c", inner], input=b"A" * 5000, capture_output=True, check=False
     )
-    assert res.returncode == 0, res.stderr.decode()
-    assert target.stat().st_size <= 1024
+    assert res.returncode != 0, "con il file pieno il writer deve uscire senza scrivere"
+    assert target.stat().st_size == before
+
+
+# --- writer dei log sul server (dove il client non puo' fare pulizia) --------
+
+
+def test_remote_writer_usa_home_e_niente_pipeline():
+    import shlex
+
+    cmd = audit.tmux_pipe_pane_enable_remote("sess", "20260929_host_x.log.gz")
+    inner = shlex.split(cmd)[-1]
+    assert "$HOME/.bravoric-ssh-client/logs/20260929_host_x.log.gz" in inner
+    assert "exec gzip" in inner
+    assert "|" not in inner.replace("||", "")
+    assert str(audit.MAX_LOG_BYTES) in inner
+
+
+def test_prune_remote_pota_per_eta_e_numero():
+    assert "mkdir -p" in audit.PRUNE_REMOTE
+    assert "find" in audit.PRUNE_REMOTE and "-delete" in audit.PRUNE_REMOTE
+    assert str(audit.MAX_AGE_DAYS) in audit.PRUNE_REMOTE
+    # tiene solo i MAX_KEEP_REMOTE piu' recenti
+    assert str(audit.MAX_KEEP_REMOTE + 1) in audit.PRUNE_REMOTE
+
+
+def test_audit_pipe_cmds_remoto_ha_tetto_e_prune(tmp_path: Path):
+    """Il ramo remoto deve usare il writer nuovo e la retention: prima lanciava un
+    ``gzip -c >> $HOME/...`` senza alcun tetto e senza pulizia, e i log remoti
+    crescevano senza limite."""
+    from bravoric_ssh_client.config import Host
+    from bravoric_ssh_client.ssh import tmux_runner
+
+    host = Host(alias="srv", host="10.1.1.5", user="root")
+    enable, disable = tmux_runner._audit_pipe_cmds(host, "sess", tmp_path / "x.log.gz")
+    assert "exec gzip" in enable
+    assert "$HOME/.bravoric-ssh-client/logs" in enable
+    assert "find" in enable  # retention sul server
+    assert "tail -n +" in enable  # tetto sul numero di file
+    assert "pipe-pane -t 'sess'" in disable
 
 
 # --- retention --------------------------------------------------------------

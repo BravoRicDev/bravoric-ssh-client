@@ -28,6 +28,20 @@ from .shellutil import sh_quote
 MAX_LOG_BYTES = 64 * 1024 * 1024  # tetto per singolo file (compresso)
 MAX_TOTAL_BYTES = 1024 * 1024 * 1024  # budget complessivo della cartella
 MAX_AGE_DAYS = 30  # eta' massima di un log
+MAX_KEEP_REMOTE = 30  # quanti file tenere nella cartella log del SERVER (per nome)
+
+# Pulizia lato SERVER. ``prune_logs`` gira dove gira il client, quindi non copre i
+# log che il pipe-pane scrive nella home del server: senza questa i log remoti
+# crescono senza limite (osservati 17 file su un host). Rimuove per eta' e poi
+# tiene solo i MAX_KEEP_REMOTE piu' recenti, per un totale massimo di
+# MAX_KEEP_REMOTE * MAX_LOG_BYTES.
+PRUNE_REMOTE = (
+    'mkdir -p "$HOME/.bravoric-ssh-client/logs"; '
+    'find "$HOME/.bravoric-ssh-client/logs" -maxdepth 1 -name "*.log.gz" -type f '
+    f"-mtime +{MAX_AGE_DAYS} -delete 2>/dev/null; "
+    'ls -1t "$HOME/.bravoric-ssh-client/logs"/*.log.gz 2>/dev/null '
+    f"| tail -n +{MAX_KEEP_REMOTE + 1} | while IFS= read -r f; do rm -f -- \"$f\"; done"
+)
 
 
 def _unlink(path: Path) -> bool:
@@ -152,17 +166,44 @@ def script_wrap(command: str, out_gz: Path) -> str:
     return f"script -q -f {sh_quote(str(plain))} -c {cmd}; gzip -f {sh_quote(str(plain))}"
 
 
-def tmux_pipe_pane_enable(session: str, out_gz: Path) -> str:
-    """Comando tmux che inizia a registrare la sessione su un gz via gzip.
+def _writer_argv(log_shell_path: str) -> str:
+    """Corpo del writer di audit, con ``exec`` per non lasciare orfani.
 
-    Il writer e' limitato a ``MAX_LOG_BYTES``: ``head -c`` chiude il flusso quando
-    il tetto e' raggiunto, cosi' un singolo file non puo' piu' crescere senza limite.
-    L'intero comando interno passa da ``sh_quote``: prima veniva composto a mano
-    infilando un percorso gia' quotato dentro altri apici, cosa che si rompe se il
-    percorso contiene un apice.
+    ``log_shell_path`` e' il percorso del log COSI' DEVE APPARIRE alla shell che
+    esegue il comando (gia' quotato): il percorso locale, oppure ``"$HOME/..."``
+    per i log scritti nella home del server.
+
+    Il writer e' ``exec gzip``: cosi' gzip diventa il figlio DIRETTO di tmux e
+    quando tmux chiude o termina il pipe il segnale raggiunge il writer stesso.
+    Con una pipeline tmux ucciderebbe solo la shell intermedia e gzip resterebbe
+    orfano: un orfano tiene aperto l'inode di un file gia' cancellato, quindi la
+    retention non libera davvero lo spazio (osservato un orfano da 3,4 GB).
+    Per questo il tetto non e' piu' sul flusso ma all'apertura: se il file ha gia'
+    raggiunto MAX_LOG_BYTES non lo si riapre. Il limite complessivo lo garantiscono
+    prune_logs() in locale e PRUNE_REMOTE sul server.
+    """
+    return (
+        f"_c=$( (wc -c < {log_shell_path}) 2>/dev/null || echo 0 ) ; "
+        f'[ "$_c" -lt {MAX_LOG_BYTES} ] && exec gzip -c >> {log_shell_path}'
+    )
+
+
+def tmux_pipe_pane_enable(session: str, out_gz: Path) -> str:
+    """Comando tmux che inizia a registrare la sessione su un gz via gzip."""
+    target = sh_quote(session)
+    inner = _writer_argv(sh_quote(str(out_gz)))
+    return f"tmux pipe-pane -o -t {target} {sh_quote(inner)}"
+
+
+def tmux_pipe_pane_enable_remote(session: str, remote_name: str) -> str:
+    """Come ``tmux_pipe_pane_enable`` ma il log sta nella home del SERVER.
+
+    ``remote_name`` e' il solo nome file (gia' sanitizzato): il percorso viene
+    composto sul server con ``$HOME``, cosi' non dipende dalla home del client.
     """
     target = sh_quote(session)
-    inner = f"gzip -c | head -c {MAX_LOG_BYTES} >> {sh_quote(str(out_gz))}"
+    path = f'"$HOME/.bravoric-ssh-client/logs/{remote_name}"'
+    inner = _writer_argv(path)
     return f"tmux pipe-pane -o -t {target} {sh_quote(inner)}"
 
 
