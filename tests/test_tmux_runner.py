@@ -118,7 +118,10 @@ def test_tmux_attach_uses_session_title(monkeypatch):
     tr.tmux_attach(host, "sess1", None)
     assert calls, "atteso exec locale"
     assert "set-titles-string 'srv - #S'" in calls[0]
-    assert "attach -t 'sess1'" in calls[0]
+    # attach-or-create: `new -A -s` aggancia se la sessione esiste e la crea se manca.
+    # `attach -t` da solo uscirebbe all'istante su sessione inesistente, chiudendo la
+    # finestra del terminale (bug: "la finestra si apre e si chiude subito").
+    assert "new -A -s 'sess1'" in calls[0]
 
 
 def test_sh_quote():

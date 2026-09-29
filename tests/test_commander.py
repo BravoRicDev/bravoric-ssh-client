@@ -8,11 +8,10 @@ import sys
 from pathlib import Path
 
 import pytest
+from textual.widgets import ListView
 
 from bravoric_ssh_client.config import Config, Host
 from bravoric_ssh_client.ssh import commander
-
-from textual.widgets import ListView
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only shell/exec paths")
 
@@ -239,13 +238,15 @@ def test_sftp_target_screen_launches_kitty(monkeypatch):
             await pilot.pause(0.4)
             assert popen_calls, "nessuna finestra kitty aperta"
             args = popen_calls[0]
-            # kitty vuole `kitty sh -c <cmd>`: niente -x, niente stringa unica
+            # kitty vuole `kitty --hold sh -c <cmd>`: niente -x, niente stringa unica.
+            # `--hold` tiene aperta la finestra se il comando esce subito.
             assert "kitty" in args[0]
-            assert args[1] == "sh"
-            assert args[2] == "-c"
-            assert "exec " in args[3]
-            assert "--sftp" in args[3]
-            assert "alpha" in args[3] and "locale" in args[3]
+            assert args[1] == "--hold"
+            assert args[2] == "sh"
+            assert args[3] == "-c"
+            assert "exec " in args[4]
+            assert "--sftp" in args[4]
+            assert "alpha" in args[4] and "locale" in args[4]
             await pilot.press("q")
             await pilot.pause()
 

@@ -120,22 +120,33 @@ def _cleanup_helper(helper: Path | None) -> None:
 
 
 def _schedule_cleanup_posix(helper: Path) -> None:
-    """Rimuove l'helper dopo l'exit del processo ssh (exec'd al posto del padre)."""
-    parent = os.getpid()
-    pid = os.fork()
-    if pid == 0:  # figlio guardiano: attende che il padre (ssh) termini
-        try:
-            while True:
-                try:
-                    os.kill(parent, 0)
-                except (ProcessLookupError, PermissionError):
-                    break
-                import time
+    """Rimuove l'helper (file ``SSH_ASKPASS``) quando il processo ssh termina.
 
-                time.sleep(0.5)
-        finally:
-            _cleanup_helper(helper)
-            os._exit(0)
+    L'helper deve sopravvivere finché ssh gira, ma il processo corrente sta per
+    diventare ssh via ``exec`` (stesso pid): serve quindi un processo separato che
+    resti in attesa e poi elimini il file.
+
+    NON usiamo ``os.fork()`` nudo. Questa applicazione è multi-threaded (Textual) e
+    un fork senza exec lascia al figlio i lock posseduti dagli altri thread in stato
+    bloccato (rischio di deadlock) e una copia integrale del processo in memoria, che
+    si accumula a ogni connessione (guardiani zombie da decine di MB, vivi quanto la
+    sessione ssh). Lanciamo invece una piccola shell con ``subprocess.Popen``: il figlio
+    fa subito ``exec`` e non esegue più codice Python, quindi nessun lock ereditato.
+    """
+    parent = os.getpid()
+    script = f'while kill -0 {parent} 2>/dev/null; do sleep 0.5; done; rm -f -- "$1"'
+    try:
+        subprocess.Popen(
+            ["/bin/sh", "-c", script, "sh", str(helper)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError:
+        # Se non riusciamo ad avviare il guardiano preferiamo lasciare il file
+        # temporaneo piuttosto che bloccare la connessione.
+        pass
 
 
 def _run_or_exec(
@@ -148,6 +159,16 @@ def _run_or_exec(
     if _IS_POSIX:
         if helper is not None:
             _schedule_cleanup_posix(helper)
+        # restart_after_ssh: l'exec sostituisce questo processo, quindi per riaprire la TUI
+        # al termine della sessione ssh il comando deve girare dentro una shell che
+        # sopravvive all'exec. Se il rilancio fallisce apriamo una shell, così la finestra
+        # del terminale non si chiude mai di colpo.
+        restart = (env or os.environ).get("BRAVORIC_RESTART_COMMAND", "").strip()
+        if restart:
+            script = f"{_shlex_join(argv)}; exec {restart} || exec ${{SHELL:-/bin/sh}}"
+            argv = ["/bin/sh", "-c", script]
+            env = dict(env) if env else dict(os.environ)
+            env.pop("BRAVORIC_RESTART_COMMAND", None)
         if env:
             os.execvpe(argv[0], argv, env)
         os.execvp(argv[0], argv)
@@ -275,18 +296,36 @@ def _attach_cmd(
         f"tmux refresh-client -S -t '{esc}' 2>/dev/null) &"
     )
 
+    # L'attach "semplice" usa `new -A -s`: aggancia la sessione se esiste e la crea
+    # se manca. `tmux attach -t 'X'` invece esce all'istante quando la sessione non
+    # esiste, facendo chiudere la finestra del terminale in poche centinaia di ms
+    # (sintomo: "la finestra si apre e si chiude subito"). Vale anche per le sessioni
+    # proposte dalla history, che possono essere stale. `attach -r` (sola lettura)
+    # resta invariato: non deve creare nulla.
+    if base == "attach":
+        base = "new -A -s"
+        create = True
+
+    # Normalizza il nome della sessione: si passa SEMPRE con `-s '<nome>'`, una sola
+    # volta, e i flag booleani (-A, -d) stanno prima, perché `-s` consuma il token
+    # successivo come proprio argomento.
     if base.startswith("new"):
-        target = f"'{esc}'"  # new usa -s <nome>
-        if audit is None:
-            return _tmux_wrap_full(host.alias, f"{maximize} tmux {base} {target}")
+        base = base.replace("-s", "").strip()  # "new -A -s" -> "new -A"
+        target = f"-s '{esc}'"
     else:
-        target = f"-t '{esc}'"  # attach usa -t <sessione>
-        if audit is None:
-            return _tmux_wrap_full(host.alias, f"{maximize} tmux {base} {target}")
+        target = f"-t '{esc}'"
+
+    if audit is None:
+        return _tmux_wrap_full(host.alias, f"{maximize} tmux {base} {target}")
+
     enable, disable = _audit_pipe_cmds(host, session, audit)
     if create:
-        # nuova sessione: crea detached, avvia il pipe, poi aggancia
-        body = f"tmux {base} -d -s '{esc}' 2>/dev/null; {enable}; {maximize} tmux attach -t '{esc}'; {disable}"
+        # Assicura la sessione detached (-A: non ricrea se esiste; -d: non agganciare
+        # ora), avvia il pipe-pane di audit, poi aggancia.
+        body = (
+            f"tmux {base} -d {target} 2>/dev/null; {enable}; "
+            f"{maximize} tmux attach -t '{esc}'; {disable}"
+        )
     else:
         body = f"{enable}; {maximize} tmux {base} {target}; {disable}"
     return _tmux_wrap_full(host.alias, body)

@@ -83,7 +83,8 @@ def test_runner_local_builds_tmux_argv(local_host, monkeypatch):
     tmux_runner.tmux_attach(local_host, "sess1", None)
     assert calls
     cmd = calls[0][-1] if calls[0][0].endswith("sh") else " ".join(calls[0])
-    assert "tmux attach -t 'sess1'" in cmd
+    # attach-or-create (vedi _attach_cmd): aggancia se esiste, crea se manca
+    assert "tmux new -A -s 'sess1'" in cmd
     assert "set-titles-string 'localhost - #S'" in cmd  # titolo per-sessione
     assert "ssh" not in cmd
     # _build_exec resta solo per ssh

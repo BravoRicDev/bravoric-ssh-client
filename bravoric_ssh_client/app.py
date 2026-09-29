@@ -104,15 +104,19 @@ def terminal_argv(terminal: str, inner: str) -> list[str]:
 
     Ogni emulatore vuole una sintassi diversa:
       ptyxis / kgx    -> -x "sh -c '<cmd>'"   (il comando come UNA stringa)
-      kitty           -> sh -c '<cmd>'        (programma, senza flag di exec)
+      kitty           -> --hold sh -c '<cmd>' (programma, senza flag di exec)
       gnome-terminal  -> -- sh -c '<cmd>'
       konsole / xterm -> -e sh -c '<cmd>'
+
+    Per kitty usiamo ``--hold``: se il comando termina subito (es. sessione tmux
+    inesistente, host irraggiungibile) la finestra resta aperta e mostra l'errore,
+    invece di sparire all'istante.
     """
     name = os.path.basename(terminal)
     if name in ("ptyxis", "kgx"):
         return [terminal, "-x", f"sh -c {_sh_quote(inner)}"]
     if name == "kitty":
-        return [terminal, "sh", "-c", inner]
+        return [terminal, "--hold", "sh", "-c", inner]
     if name == "gnome-terminal":
         return [terminal, "--", "sh", "-c", inner]
     return [terminal, "-e", "sh", "-c", inner]
@@ -4698,7 +4702,11 @@ def _jh_host_health(app, args, opts) -> None:
     from .ssh import inspection
 
     h = _cli_resolve_host(app, args[0])
-    _jprint(_unwrap(inspection.remote_host_health(h, app.ssh_cfg, timeout=_opt_int(opts, "--timeout", 30))))
+    _jprint(
+        _unwrap(
+            inspection.remote_host_health(h, app.ssh_cfg, timeout=_opt_int(opts, "--timeout", 30))
+        )
+    )
 
 
 def _jh_host_network_ports(app, args, opts) -> None:
@@ -6296,6 +6304,16 @@ def main(argv: list[str] | None = None) -> None:
         jump, jump_password = app._jump_for(result.host)
         if result.kind in ("attach", "attach_ro"):
             record_history(app._config, result.host.alias, result.session or "")
+        # restart_after_ssh: la TUI non può riavviarsi da sola dopo l'exec (che sostituisce
+        # il processo). Marchiamo il comando con cui riaprirla: _run_or_exec lo eseguirà in
+        # una shell che sopravvive alla sessione ssh.
+        if app._config and app._config.restart_after_ssh:
+            tui = [sys.executable, "-m", "bravoric_ssh_client"]
+            if app._config.path:
+                tui += ["-c", str(app._config.path)]
+            if result.rotation:
+                tui += ["--rotation", result.rotation]
+            os.environ["BRAVORIC_RESTART_COMMAND"] = " ".join(_sh_quote(a) for a in tui)
         if result.kind == "attach":
             tmux_runner.tmux_attach(
                 result.host,
@@ -6331,12 +6349,9 @@ def main(argv: list[str] | None = None) -> None:
                 jump_password=jump_password,
                 audit=app._audit_for(result.host),
             )
-        # riavvia la TUI se richiesto (option restart_after_ssh)
-        if app._config and app._config.restart_after_ssh:
-            extra = []
-            if result.rotation:
-                extra = ["--rotation", result.rotation]
-            main(["-c", str(app._config.path or ""), *extra])
+        # NB: non c'è più un rilancio della TUI qui. L'exec in _run_or_exec sostituisce il
+        # processo, quindi il codice dopo le chiamate tmux_runner.* non viene mai eseguito:
+        # il rilancio è gestito da BRAVORIC_RESTART_COMMAND (impostato più sopra).
 
 
 if __name__ == "__main__":
