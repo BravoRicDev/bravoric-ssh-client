@@ -54,13 +54,15 @@ def cmd_hosts() -> dict[str, Any]:
             or "production" in h.alias.lower()
             or any("prod" in str(t).lower() for t in getattr(h, "tags", []))
         )
-        hosts.append({
-            "alias": h.alias,
-            "host": h.host,
-            "user": h.user or "",
-            "tags": list(getattr(h, "tags", [])),
-            "is_prod": is_prod,
-        })
+        hosts.append(
+            {
+                "alias": h.alias,
+                "host": h.host,
+                "user": h.user or "",
+                "tags": list(getattr(h, "tags", [])),
+                "is_prod": is_prod,
+            }
+        )
     return {"ok": True, "hosts": hosts}
 
 
@@ -150,7 +152,9 @@ def cmd_pane_command(alias: str, session: str) -> dict[str, Any]:
         return {"ok": False, "command": "", "error": str(e)}
 
 
-def cmd_close(alias: str, session: str, method: str = "auto", force: bool = False) -> dict[str, Any]:
+def cmd_close(
+    alias: str, session: str, method: str = "auto", force: bool = False
+) -> dict[str, Any]:
     m = get_mcp()
     try:
         detail = m.close_foreground(alias=alias, session=session, method=method, force=force)
@@ -294,9 +298,7 @@ def cmd_windows(alias: str, session: str) -> dict[str, Any]:
 def cmd_select_window(alias: str, session: str, window_index: int | str) -> dict[str, Any]:
     m = get_mcp()
     try:
-        detail = m.select_window(
-            alias=alias, session=session, window_index=int(window_index)
-        )
+        detail = m.select_window(alias=alias, session=session, window_index=int(window_index))
         ok = not detail.strip().lower().startswith("errore")
         return {"ok": ok, "detail": detail.strip(), "error": "" if ok else detail.strip()}
     except Exception as e:
@@ -316,16 +318,12 @@ def cmd_new_window(alias: str, session: str, name: str = "") -> dict[str, Any]:
 # ---------- FEATURE 5: restart_foreground ----------
 
 
-def cmd_restart(
-    alias: str, session: str, fallback_command: str = ""
-) -> dict[str, Any]:
+def cmd_restart(alias: str, session: str, fallback_command: str = "") -> dict[str, Any]:
     """Chiude e rilancia il processo in primo piano (riavvio deterministico)."""
     m = get_mcp()
     try:
         return _json_or_text(
-            m.restart_foreground(
-                alias=alias, session=session, fallback_command=fallback_command
-            )
+            m.restart_foreground(alias=alias, session=session, fallback_command=fallback_command)
         )
     except Exception as e:
         return {"ok": False, "error": str(e)}
