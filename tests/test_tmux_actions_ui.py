@@ -159,8 +159,12 @@ def test_windows_shows_info(monkeypatch):
 
 def test_attach_ro_launches(monkeypatch):
     """R chiede il terminale e apre la sessione in sola lettura in finestra nuova."""
+    # NIENTE prefisso `tests.`: `tests/__init__.py` non esiste, quindi il nome
+    # `tests` non e' importabile. Con l'import mode `prepend` di pytest e' la
+    # directory `tests/` a finire in sys.path, ed e' li' che vive questo helper.
+    from test_app import stub_terminal_launch
+
     from bravoric_ssh_client.terminal_choice import TerminalChoiceScreen
-    from tests.test_app import stub_terminal_launch
 
     spawned = stub_terminal_launch(
         monkeypatch, terminals=("/usr/bin/gnome-terminal", "/usr/bin/kitty")
@@ -256,6 +260,21 @@ def test_launch_agent_localhost(monkeypatch):
     """Meta+N apre LaunchAgentScreen direttamente da HostScreen (localhost)."""
     from bravoric_ssh_client.app import LaunchAgentScreen
 
+    # QUALI agenti compaiono nel Select lo decide `_detect_agents`, che interroga
+    # il host via SSH (`command -v`). Senza stub il test dipende dalla MACCHINA che
+    # lo esegue: sulla macchina di sviluppo l'SSH verso 127.0.0.1 trova gli agenti
+    # installati, in CI nessuno e il Select resta col solo placeholder. Si stubba
+    # l'adapter (non la schermata), cosi' il codice di rilevamento viene esercitato
+    # davvero. Il ramo su `command -v` tiene separato `_load_models`, che usa lo
+    # stesso adapter: li' lo stdout vuoto significa "nessun modello".
+    def fake(host, command, cfg=None, *, timeout=20):
+        stdout = (
+            "FOUND:opencode\nFOUND:claude\nFOUND:hermes\n" if "command -v" in command else ""
+        )
+        return ssh_adapter.TmuxActionResult(ok=True, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(ssh_adapter, "run_tmux_action", fake)
+
     async def run():
         cfg = make_config()
         # ensure localhost exists in config
@@ -273,11 +292,15 @@ def test_launch_agent_localhost(monkeypatch):
             app.screen.action_launch_agent_localhost()  # type: ignore[attr-defined]
             await pilot.pause()
             assert isinstance(app.screen, LaunchAgentScreen)
-            # Verify Select widget with agent options
+            # Verify Select widget with agent options. Si asseriscono i VALORI
+            # (l'ordine e l'eventuale opzione vuota di Textual non contano), non
+            # una lunghezza: `len() >= 3` passava anche per ragioni sbagliate.
+            await pilot.pause(0.2)
             from textual.widgets import Select
 
-            sel = app.screen.query_one(Select)
-            assert len(sel._options) >= 3
+            sel = app.screen.query_one("#agent", Select)
+            values = {value for _prompt, value in sel._options}
+            assert {"opencode", "claude", "hermes"} <= values, values
             # Verify path input allows empty (placeholder for home)
             from textual.widgets import Input
 
