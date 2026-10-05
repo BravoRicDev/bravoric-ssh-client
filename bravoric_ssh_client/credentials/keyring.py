@@ -12,9 +12,9 @@ dopo ``TIMEOUT_SECONDS``; da quel momento le successive letture falliscono subit
 
 from __future__ import annotations
 
-import threading
-import queue
 import functools
+import queue
+import threading
 
 import keyring
 import keyring.errors
@@ -29,7 +29,7 @@ _unresponsive = threading.Event()
 _unresponsive_lock = threading.Lock()
 
 # Single persistent worker thread with queue to avoid thread-per-call leak.
-_worker_queue: "queue.Queue[tuple[functools.partial, queue.Queue]]" = queue.Queue()
+_worker_queue: queue.Queue[tuple[functools.partial, queue.Queue]] = queue.Queue()
 _worker_started = False
 _worker_thread: threading.Thread | None = None
 
@@ -71,7 +71,7 @@ def _run_bounded(fn):
     except queue.Empty:
         with _unresponsive_lock:
             _unresponsive.set()
-        raise _Timeout
+        raise _Timeout from None
     if status == "error":
         raise value
     return value

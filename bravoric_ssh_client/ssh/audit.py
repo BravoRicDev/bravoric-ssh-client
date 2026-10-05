@@ -40,7 +40,7 @@ PRUNE_REMOTE = (
     'find "$HOME/.bravoric-ssh-client/logs" -maxdepth 1 -name "*.log.gz" -type f '
     f"-mtime +{MAX_AGE_DAYS} -delete 2>/dev/null; "
     'ls -1t "$HOME/.bravoric-ssh-client/logs"/*.log.gz 2>/dev/null '
-    f"| tail -n +{MAX_KEEP_REMOTE + 1} | while IFS= read -r f; do rm -f -- \"$f\"; done"
+    f'| tail -n +{MAX_KEEP_REMOTE + 1} | while IFS= read -r f; do rm -f -- "$f"; done'
 )
 
 

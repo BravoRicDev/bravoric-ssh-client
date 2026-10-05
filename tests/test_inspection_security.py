@@ -85,15 +85,15 @@ def test_remote_project_tree_local(tmp_path: Path):
 def test_tunnel_bind_must_be_loopback(tmp_path: Path):
     cfg = tmp_path / "config.toml"
     cfg.write_text(
-        '[[hosts]]\n'
+        "[[hosts]]\n"
         'alias = "h1"\n'
         'host = "example.com"\n'
-        '\n'
-        '[[hosts.tunnels]]\n'
+        "\n"
+        "[[hosts.tunnels]]\n"
         'kind = "L"\n'
-        'local_port = 9000\n'
+        "local_port = 9000\n"
         'remote_host = "127.0.0.1"\n'
-        'remote_port = 80\n'
+        "remote_port = 80\n"
         'bind = "0.0.0.0"\n'
     )
     with pytest.raises(ConfigError):
@@ -103,15 +103,15 @@ def test_tunnel_bind_must_be_loopback(tmp_path: Path):
 def test_tunnel_bind_loopback_accepted(tmp_path: Path):
     cfg = tmp_path / "config.toml"
     cfg.write_text(
-        '[[hosts]]\n'
+        "[[hosts]]\n"
         'alias = "h1"\n'
         'host = "example.com"\n'
-        '\n'
-        '[[hosts.tunnels]]\n'
+        "\n"
+        "[[hosts.tunnels]]\n"
         'kind = "L"\n'
-        'local_port = 9000\n'
+        "local_port = 9000\n"
         'remote_host = "127.0.0.1"\n'
-        'remote_port = 80\n'
+        "remote_port = 80\n"
         'bind = "127.0.0.1"\n'
     )
     loaded = load_config(cfg)

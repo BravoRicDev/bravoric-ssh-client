@@ -36,7 +36,7 @@ SERVER_ALIVE_INTERVAL = "30"
 SERVER_ALIVE_COUNT_MAX = "3"
 
 
-class ErrorCategory(str, enum.Enum):
+class ErrorCategory(enum.StrEnum):
     AUTH_FAILED = "auth_failed"
     HOST_UNREACHABLE = "host_unreachable"
     TIMEOUT = "timeout"

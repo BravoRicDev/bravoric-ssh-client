@@ -70,7 +70,7 @@ def test_file_size_limits(mock_run_py):
     h = Host(alias="test", host="1.2.3.4")
 
     # File troppo grande per lettura
-    res = remote_read_file(h, None, "/large_file.txt", limit=100000000)
+    remote_read_file(h, None, "/large_file.txt", limit=100000000)
     # Dovrebbe includere MAX_FILE_SIZE nello script Python inviato
     assert mock_run_py.called
     script = mock_run_py.call_args[0][2]

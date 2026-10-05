@@ -2546,7 +2546,6 @@ class QuickLaunchScreen(BravoricScreen):
         cfg = self.app.ssh_cfg
         q = _sh_quote
         names = [c["name"] for c in self._agents_cfg]
-        grid = self.query_one("#ql-grid")
         if not names:
             self._status.update("[yellow]Nessun agente configurato[/]")
             self.query_one("#btn-terminal").focus()

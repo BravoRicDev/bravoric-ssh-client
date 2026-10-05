@@ -183,6 +183,7 @@ def _wait_run_and_read(
     adapter.run_tmux_action(host, f"tmux kill-session -t {q(name)} 2>/dev/null", mcp._ssh_cfg())
     # Cleanup logfile on timeout
     from .ssh.broadcast import run_snippet_on_host
+
     run_snippet_on_host(
         host,
         f"rm -f {q(logfile)} 2>/dev/null",
@@ -216,7 +217,7 @@ class PaneDiffTracker:
         if len(self._cache) > self._max_cache_size:
             # Remove oldest 20% of entries
             excess = len(self._cache) - self._max_cache_size
-            for key in list(self._cache.keys())[:excess + int(self._max_cache_size * 0.2)]:
+            for key in list(self._cache.keys())[: excess + int(self._max_cache_size * 0.2)]:
                 self._cache.pop(key, None)
 
     @staticmethod
@@ -2229,10 +2230,7 @@ class BravoricMcp:
     ) -> str:
         host = self._host(alias)
         if not is_loopback_bind(bind):
-            return (
-                f"errore: bind '{bind}' non consentito "
-                "(solo loopback: localhost/127.0.0.1/::1)"
-            )
+            return f"errore: bind '{bind}' non consentito (solo loopback: localhost/127.0.0.1/::1)"
         spec = Tunnel(
             name=name,
             kind=kind.upper(),
@@ -2748,9 +2746,7 @@ class BravoricMcp:
         ]
         for name, method_name, description in specs:
             method = getattr(self, method_name)
-            self.server.tool(name=name, description=description)(
-                self._instrument(name, method)
-            )
+            self.server.tool(name=name, description=description)(self._instrument(name, method))
 
     def run(self) -> None:
         self.server.run(transport="stdio")
