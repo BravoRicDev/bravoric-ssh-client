@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -76,7 +77,9 @@ def test_plain_provider_roundtrip(tmp_path: Path, monkeypatch):
     provider.set(host, "s3cret!")
     assert provider.get(host) == "s3cret!"
     assert secrets.exists()
-    if hasattr(secrets, "stat"):
+    # I bit di permesso POSIX non esistono su Windows: li' la riservatezza la
+    # decidono le ACL e `st_mode` resta 0o666, quindi la verifica vale solo su POSIX.
+    if os.name == "posix":
         assert (secrets.stat().st_mode & 0o777) == 0o600
     provider.delete(host)
     assert provider.get(host) is None

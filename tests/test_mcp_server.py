@@ -30,8 +30,20 @@ def _run(coro):
 
 
 async def _call(mcp: BravoricMcp, name: str, args: dict) -> str:
+    """Esegue un tool MCP e restituisce il testo della risposta.
+
+    Il tipo di ritorno dell'SDK e' un'UNIONE: `InputRequiredResult` non ha
+    `content`, e le voci di `content` possono essere immagini (senza `text`).
+    Qui si legge con `getattr` e si ASSERISCE cio' che i test pretendono: un
+    contenuto inatteso fallisce con un messaggio chiaro invece di diventare un
+    `None` che esplode tre righe dopo, in un'asserzione che parla d'altro.
+    """
     res = await mcp.server.call_tool(name, args)
-    return res.content[0].text
+    content = getattr(res, "content", None)
+    assert content, res
+    text = getattr(content[0], "text", None)
+    assert isinstance(text, str), content[0]
+    return text
 
 
 def test_tools_registered(tmp_path):
@@ -188,6 +200,7 @@ def test_broadcast_tmux_mocked(monkeypatch, tmp_path):
 
 def test_read_audit_log_ok(tmp_path):
     cfg = make_cfg(tmp_path)
+    assert cfg.path is not None  # `make_cfg` lo imposta sempre
     logs_dir = cfg.path.parent / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
     gz = logs_dir / "20260910_alpha_sess.log.gz"
@@ -348,8 +361,6 @@ def test_find_in_sessions(monkeypatch, tmp_path):
 
 
 def test_run_command_all(monkeypatch, tmp_path):
-    from bravoric_ssh_client import mcp_server
-
     class FakeRes:
         def __init__(self, alias):
             self.host_alias = alias
@@ -359,9 +370,14 @@ def test_run_command_all(monkeypatch, tmp_path):
             self.stderr = ""
             self.error = ""
 
+    # `run_command_all` importa la funzione DENTRO il metodo
+    # (`from .ssh.broadcast import run_snippet_on_hosts`), quindi patchare
+    # `mcp_server.run_snippet_on_hosts` non ha alcun effetto: il test eseguiva
+    # davvero i comandi e passava solo perche' l'host `loc` e' locale, tentando
+    # per giunta un SSH vero verso 192.0.2.1. Il bersaglio giusto e' il modulo
+    # che viene letto al momento della chiamata.
     monkeypatch.setattr(
-        mcp_server,
-        "run_snippet_on_hosts",
+        "bravoric_ssh_client.ssh.broadcast.run_snippet_on_hosts",
         lambda h, c, cfg, timeout=60: [FakeRes(x.alias) for x in h],
     )
     mcp = BravoricMcp(config=make_cfg(tmp_path))

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from bravoric_ssh_client.config import Config, Host
 from bravoric_ssh_client.mcp_server import BravoricMcp
 from bravoric_ssh_client.ssh.inspection import (
@@ -13,6 +15,7 @@ from bravoric_ssh_client.ssh.inspection import (
 )
 
 
+@pytest.mark.posix_local
 def test_remote_search_files_local(tmp_path: Path):
     host = Host(alias="loc", host="localhost", local=True)
 
@@ -46,6 +49,7 @@ def test_remote_search_files_local(tmp_path: Path):
     assert res_meta["data"]["results"][0]["size"] == len("hello world")
 
 
+@pytest.mark.posix_local
 def test_remote_read_file_local(tmp_path: Path):
     host = Host(alias="loc", host="localhost", local=True)
 
@@ -69,6 +73,7 @@ def test_remote_read_file_local(tmp_path: Path):
     assert res_b["data"]["content"] == "line 1"
 
 
+@pytest.mark.posix_local
 def test_remote_git_status_and_health_local():
     host = Host(alias="loc", host="localhost", local=True)
 
@@ -97,6 +102,7 @@ def test_mcp_server_registers_new_tools(tmp_path: Path):
 # ── Test Nuove Funzionalità: Chunked File Operations ────────────────
 
 
+@pytest.mark.posix_local
 def test_remote_read_file_too_large(tmp_path: Path):
     """remote_read_file rifiuta file > MAX_FILE_SIZE con code='file_too_large'."""
     host = Host(alias="loc", host="localhost", local=True)
@@ -108,6 +114,7 @@ def test_remote_read_file_too_large(tmp_path: Path):
     assert "File troppo grande" in res.get("error", "")
 
 
+@pytest.mark.posix_local
 def test_remote_replace_block_too_large(tmp_path: Path):
     """remote_replace_block rifiuta file > MAX_FILE_SIZE con code='file_too_large'."""
     host = Host(alias="loc", host="localhost", local=True)

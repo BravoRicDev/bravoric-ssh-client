@@ -17,6 +17,8 @@ import os
 import time
 from pathlib import Path
 
+import pytest
+
 from bravoric_ssh_client.ssh import audit
 
 # --- cap del writer ---------------------------------------------------------
@@ -36,6 +38,7 @@ def test_pipe_pane_writer_senza_pipeline(tmp_path: Path):
     assert "pipe-pane -o" in cmd
 
 
+@pytest.mark.posix_local
 def test_pipe_pane_quota_correttamente_percorsi_strani(tmp_path: Path):
     """Il percorso finisce dentro due livelli di quoting: spazi e apici non devono
     rompere il comando (prima veniva composto a mano e si rompeva)."""
@@ -59,6 +62,7 @@ def test_pipe_pane_quota_correttamente_percorsi_strani(tmp_path: Path):
     assert weird.stat().st_size > 0
 
 
+@pytest.mark.posix_local
 def test_writer_non_riapre_un_file_pieno(tmp_path: Path):
     """Se il log ha gia' raggiunto il tetto il writer esce senza scrivere: il file
     non puo' ricominciare a crescere a ogni attach."""

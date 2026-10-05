@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from bravoric_ssh_client.config import Host
@@ -16,7 +18,9 @@ def host() -> Host:
 def test_build_exec_basic(host: Host):
     argv, env, helper, local = tmux_runner._build_exec(host, None, None)
     joined = " ".join(argv)
-    assert argv[0].endswith("ssh")
+    # Il binario risolto da shutil.which puo' essere `ssh.EXE` su Windows: il
+    # confronto sul suffisso deve ignorare case ed estensione.
+    assert Path(argv[0]).stem.lower() == "ssh"
     assert "-t" in argv
     assert "root@10.1.1.5" in joined
     assert env is None  # nessuna password -> nessun helper

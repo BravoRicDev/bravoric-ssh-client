@@ -110,6 +110,7 @@ def test_gnome_terminal_invariato():
 # --- 5. cleanup dell'helper senza os.fork() --------------------------------
 
 
+@pytest.mark.posix_local
 def test_cleanup_non_usa_fork(monkeypatch, tmp_path: Path):
     """Il guardiano non deve usare os.fork() nudo: fork senza exec in un processo
     multi-threaded (Textual) eredita i lock degli altri thread e lascia una copia
@@ -208,6 +209,7 @@ def _term_dopo_il_guard(term: str) -> str:
     return res.stdout
 
 
+@pytest.mark.posix_local
 def test_term_guard_sostituisce_term_sconosciuto():
     """Un TERM che il server non conosce (es. xterm-kitty senza terminfo) deve
     essere rimpiazzato con uno utilizzabile: senza questo tmux muore con
@@ -224,11 +226,13 @@ def test_term_guard_sostituisce_term_sconosciuto():
     assert out != "term-inesistente-xyz"
 
 
+@pytest.mark.posix_local
 def test_term_guard_lascia_intatto_term_valido():
     """Se il TERM corrente e' utilizzabile non va toccato: nessun downgrade inutile."""
     assert _term_dopo_il_guard("xterm-256color") == "xterm-256color"
 
 
+@pytest.mark.posix_local
 def test_term_guard_e_esportato():
     """Il TERM scelto deve essere esportato, altrimenti tmux (processo figlio)
     continuerebbe a vedere quello sbagliato."""
