@@ -158,8 +158,13 @@ def test_windows_shows_info(monkeypatch):
 
 
 def test_attach_ro_launches(monkeypatch):
-    """R deve produrre un LaunchAction attach_ro all'uscita dell'app."""
-    from bravoric_ssh_client.app import LaunchAction
+    """R chiede il terminale e apre la sessione in sola lettura in finestra nuova."""
+    from bravoric_ssh_client.terminal_choice import TerminalChoiceScreen
+    from tests.test_app import stub_terminal_launch
+
+    spawned = stub_terminal_launch(
+        monkeypatch, terminals=("/usr/bin/gnome-terminal", "/usr/bin/kitty")
+    )
 
     async def run():
         app = BravoricApp(config=make_config())
@@ -167,11 +172,18 @@ def test_attach_ro_launches(monkeypatch):
             await open_sessions(app, pilot)
             await pilot.press("R")
             await pilot.pause(0.3)
-            result = app.return_value
-            assert isinstance(result, LaunchAction)
-            assert result.kind == "attach_ro"
-            assert result.session == "sess1"
-            await pilot.pause()
+            # la TUI resta viva e chiede quale terminale usare
+            assert app.return_value is None
+            assert isinstance(app.screen, TerminalChoiceScreen)
+            await pilot.press("enter")
+            await pilot.pause(0.3)
+            assert len(spawned) == 1, spawned
+            argv = spawned[0]
+            assert argv[0] == "/usr/bin/gnome-terminal"
+            assert "--attach-ro" in argv[4]  # dentro lo sh -c
+            assert "sess1" in argv[4]  # dentro lo sh -c
+            assert "alpha" in argv[4]  # dentro lo sh -c
+            assert isinstance(app.screen, SessionScreen)
 
     asyncio.run(run())
 

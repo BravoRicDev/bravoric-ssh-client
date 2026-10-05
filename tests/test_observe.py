@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from textual.widgets import Header, ListView
 
 from bravoric_ssh_client.app import BravoricApp, HostScreen, ObserveScreen, RecentScreen
 from bravoric_ssh_client.config import Config, Host, load_config
@@ -36,6 +37,46 @@ class FakeRes:
         self.stdout = stdout
         self.stderr = stderr
         self.sessions = sessions or (stdout.splitlines() if stdout else [])
+
+
+def stub_terminal_launch(
+    monkeypatch, terminals=("/usr/bin/gnome-terminal", "/usr/bin/kitty")
+) -> list[list[str]]:
+    """Neutralizza il lancio reale: restituisce la lista degli argv registrati.
+
+    L'attach apre ora una NUOVA finestra del terminale scelto: senza questa
+    neutralizzazione il test aprirebbe finestre vere e scriverebbe nella
+    cronologia dell'utente. Come in test_app.py si registrano SOLO gli argv il
+    cui primo elemento e' un terminale stub, perche' `app_module.subprocess` e'
+    il modulo condiviso e la patch di Popen intercetta anche le ssh.
+    """
+    from bravoric_ssh_client import app as app_module
+    from bravoric_ssh_client import history as history_module
+
+    stub_set = set(terminals)
+    spawned: list[list[str]] = []
+
+    def fake_popen(argv, **kwargs):
+        argv = list(argv)
+        if argv and argv[0] in stub_set:
+            spawned.append(argv)
+        return object()
+
+    monkeypatch.setattr(app_module, "detect_gui_terminals", lambda: list(terminals))
+    monkeypatch.setattr(app_module.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(history_module, "record_history", lambda *a, **k: None)
+    return spawned
+
+
+async def choose_terminal(app, pilot) -> None:
+    """Seleziona il primo terminale nella TerminalChoiceScreen e conferma."""
+    from bravoric_ssh_client.terminal_choice import TerminalChoiceScreen
+
+    assert isinstance(app.screen, TerminalChoiceScreen), type(app.screen).__name__
+    # il ListView parte vuoto: senza index, `enter` non emette l'evento
+    app.screen.query_one("#term-list", ListView).index = 0
+    await pilot.press("enter")
+    await pilot.pause(0.2)
 
 
 def test_config_auto_cycle_parsing(tmp_path: Path):
@@ -77,7 +118,7 @@ def test_observe_screen_shows_content(monkeypatch):
         async with app.run_test(size=(120, 35)) as pilot:
             await pilot.pause()
             assert isinstance(app.screen, HostScreen)
-            lv = app.screen.query_one("#host-list")
+            lv = app.screen.query_one("#host-list", ListView)
             lv.index = 0
             await pilot.press("o")
             await pilot.pause()
@@ -116,7 +157,7 @@ def test_observe_next_prev_cycle(monkeypatch):
         app = BravoricApp(config=make_cfg())
         async with app.run_test(size=(120, 35)) as pilot:
             await pilot.pause()
-            lv = app.screen.query_one("#host-list")
+            lv = app.screen.query_one("#host-list", ListView)
             lv.index = 0
             await pilot.press("o")
             await pilot.pause(0.4)
@@ -160,7 +201,7 @@ def test_observe_manual_switch_shows_immediately_with_slow_capture(monkeypatch):
         app = BravoricApp(config=make_cfg())
         async with app.run_test(size=(120, 35)) as pilot:
             await pilot.pause()
-            lv = app.screen.query_one("#host-list")
+            lv = app.screen.query_one("#host-list", ListView)
             lv.index = 0
             await pilot.press("o")
             await pilot.pause(1.2)
@@ -237,8 +278,8 @@ def test_reopen_all_dedup(monkeypatch, tmp_path: Path):
 
 
 def test_observe_attach_launches(monkeypatch):
-    """Enter nell'ObserveScreen deve produrre un LaunchAction attach."""
-    from bravoric_ssh_client.app import LaunchAction
+    """Enter nell'ObserveScreen deve aprire la scelta del terminale."""
+    from bravoric_ssh_client.terminal_choice import TerminalChoiceScreen
 
     monkeypatch.setattr(
         ssh_adapter, "list_tmux_sessions", lambda host, cfg=None: FakeRes(ok=True, stdout="s1\n")
@@ -248,22 +289,28 @@ def test_observe_attach_launches(monkeypatch):
         "tmux_capture_pane",
         lambda host, session, cfg=None, lines=200, window=None: FakeRes(ok=True, stdout="x"),
     )
+    spawned = stub_terminal_launch(monkeypatch)
 
     async def run():
         app = BravoricApp(config=make_cfg())
         async with app.run_test(size=(120, 35)) as pilot:
             await pilot.pause()
-            lv = app.screen.query_one("#host-list")
+            lv = app.screen.query_one("#host-list", ListView)
             lv.index = 0
             await pilot.press("o")
             await pilot.pause(0.4)
             await pilot.press("enter")
             await pilot.pause(0.3)
-            result = app.return_value
-            assert isinstance(result, LaunchAction)
-            assert result.kind == "attach"
-            assert result.host.alias == "alpha"
-            assert result.session == "s1"
+            # la TUI resta viva e chiede quale terminale usare
+            assert isinstance(app.screen, TerminalChoiceScreen), type(app.screen).__name__
+            assert app.return_value is None
+            await choose_terminal(app, pilot)
+            assert len(spawned) == 1, spawned
+            argv = spawned[0]
+            assert argv[0] == "/usr/bin/gnome-terminal"
+            assert "--attach" in argv[4]  # dentro lo sh -c
+            assert "s1" in argv[4]
+            assert "alpha" in argv[4]
 
     asyncio.run(run())
 
@@ -370,9 +417,9 @@ def test_observe_rotation_window_title(monkeypatch, tmp_path: Path):
             s = app.screen
             assert isinstance(s, ObserveScreen), type(s).__name__
             # il titolo della schermata (Header) mostra il nome della rotazione
-            assert "Claude - Tutti i server" in s.title
+            assert "Claude - Tutti i server" in (s.title or "")
             assert s.sub_title == "osservazione"
-            header = s.query_one("Header")
+            header = s.query_one(Header)
             assert "Claude - Tutti i server" in str(header.format_title())
             await pilot.press("escape")
             await pilot.pause(0.3)
@@ -401,7 +448,7 @@ def test_observe_pane_handles_markup_chars(monkeypatch):
         app = BravoricApp(config=make_cfg())
         async with app.run_test(size=(120, 35)) as pilot:
             await pilot.pause()
-            lv = app.screen.query_one("#host-list")
+            lv = app.screen.query_one("#host-list", ListView)
             lv.index = 0
             await pilot.press("o")
             await pilot.pause(0.6)
@@ -420,8 +467,6 @@ def test_observe_pane_handles_markup_chars(monkeypatch):
 
 def test_observe_interactive_send_keys(monkeypatch):
     """Modalità interattiva: scrivi, Invio invia testo+Enter, Ctrl+S senza Enter."""
-    from bravoric_ssh_client.app import LaunchAction
-
     sent = []
 
     def fake_send_keys(host, session, text, cfg=None):
@@ -446,12 +491,13 @@ def test_observe_interactive_send_keys(monkeypatch):
     )
     monkeypatch.setattr(ssh_adapter, "tmux_send_keys", fake_send_keys)
     monkeypatch.setattr(ssh_adapter, "tmux_send_enter", fake_send_enter)
+    spawned = stub_terminal_launch(monkeypatch)
 
     async def run():
         app = BravoricApp(config=make_cfg())
         async with app.run_test(size=(120, 35)) as pilot:
             await pilot.pause()
-            lv = app.screen.query_one("#host-list")
+            lv = app.screen.query_one("#host-list", ListView)
             lv.index = 0
             await pilot.press("o")
             await pilot.pause(0.4)
@@ -484,21 +530,20 @@ def test_observe_interactive_send_keys(monkeypatch):
             await pilot.pause(0.2)
             assert s._interactive is False
             assert isinstance(app.screen, ObserveScreen)
-            # attach genera LaunchAction
+            # attach apre la scelta del terminale (la TUI resta viva)
             await pilot.press("enter")
             await pilot.pause(0.3)
-            result = app.return_value
-            assert isinstance(result, LaunchAction)
-            assert result.kind == "attach"
-            assert result.session == "s1"
+            await choose_terminal(app, pilot)
+            assert len(spawned) == 1, spawned
+            assert spawned[0][0] == "/usr/bin/gnome-terminal"
+            assert "s1" in spawned[0][4]
 
     asyncio.run(run())
 
 
 def test_observe_rotation_attach_returns_to_rotation(tmp_path: Path):
-    """Da una rotazione, Enter produce LaunchAction con rotation, e all'avvio
-    con --rotation la rotazione viene riaperta."""
-    from bravoric_ssh_client.app import LaunchAction
+    """Da una rotazione, Enter chiede il terminale e passa --rotation, che e'
+    appunto cio' che fa riaprire la rotazione al termine dell'attach."""
     from bravoric_ssh_client.rotation import Rotation, add_rotation
 
     monkeypatch = pytest.MonkeyPatch()
@@ -516,6 +561,7 @@ def test_observe_rotation_attach_returns_to_rotation(tmp_path: Path):
     cfg = make_cfg()
     cfg.path = tmp_path / "config.toml"
     add_rotation(cfg, Rotation("rotA", [("alpha", "s1"), ("alpha", "s2")]))
+    spawned = stub_terminal_launch(monkeypatch)
 
     async def run():
         # 1) avvio con start_rotation -> ObserveScreen della rotazione
@@ -526,13 +572,16 @@ def test_observe_rotation_attach_returns_to_rotation(tmp_path: Path):
             assert isinstance(s, ObserveScreen)
             assert s._name == "rotA"
             assert s._views == [("alpha", "s1"), ("alpha", "s2")]
-            # 2) Enter -> LaunchAction con rotation per tornare dopo l'attach
+            # 2) Enter -> scelta del terminale, e la rotazione viaggia come
+            #    --rotation: e' quello che la fa riaprire dopo l'attach
             await pilot.press("enter")
             await pilot.pause(0.3)
-            result = app.return_value
-            assert isinstance(result, LaunchAction)
-            assert result.kind == "attach"
-            assert result.rotation == "rotA"
+            await choose_terminal(app, pilot)
+            assert len(spawned) == 1, spawned
+            inner = spawned[0][4]  # dentro lo sh -c
+            assert "--rotation" in inner
+            assert "rotA" in inner
+            assert "--attach" in inner
 
     asyncio.run(run())
     monkeypatch.undo()

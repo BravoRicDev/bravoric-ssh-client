@@ -42,6 +42,7 @@ from .ssh import tmux_runner
 from .ssh.adapter import SshConfig
 from .ssh.shellutil import sh_quote
 from .ssh.tunnels import TunnelManager
+from .terminal_choice import TerminalChoiceScreen
 
 
 @dataclass
@@ -99,6 +100,32 @@ def find_gui_terminal() -> str | None:
     return None
 
 
+def detect_gui_terminals() -> list[str]:
+    """Tutti i terminali GUI trovati nel PATH, in ordine di preferenza.
+
+    Rispetta BRAVORIC_TERMINAL (restituisce solo quello se impostato).
+    """
+    override = os.environ.get("BRAVORIC_TERMINAL", "").strip()
+    if override:
+        found = shutil.which(override)
+        if not found:
+            try:
+                candidate = Path(override).expanduser()
+                if candidate.is_file() and os.access(candidate, os.X_OK):
+                    found = str(candidate)
+            except OSError:
+                found = None
+        if found:
+            return [found]
+        return []
+    out: list[str] = []
+    for name in _TERMINALS_DEFAULT:
+        found = shutil.which(name)
+        if found and found not in out:
+            out.append(found)
+    return out
+
+
 def terminal_argv(terminal: str, inner: str) -> list[str]:
     """Argv per far eseguire al terminale ``terminal`` il comando shell ``inner``.
 
@@ -137,7 +164,7 @@ class BravoricApp(App):
     LoadingScreen { align: center middle; }
     LoadingScreen Static { width: auto; }
     #filter-input { width: 80%; margin: 0 0 1 0; }
-    #form-box, #confirm-box, #pw-box {
+    #form-box, #confirm-box, #pw-box, #term-box {
         width: 80%; height: 1fr; border: round $accent; padding: 0 2;
         overflow-y: auto;
     }
@@ -348,9 +375,84 @@ class BravoricApp(App):
     def open_sessions(self, host: Host) -> None:
         self.push_screen(SessionScreen(self._config or Config(), host))
 
-    def request_launch(self, action: LaunchAction) -> None:
-        """Esce dalla TUI (ripristina il terminale) e chiede l'azione SSH."""
-        self.exit(action)
+    def request_launch(self, action: LaunchAction, in_new_terminal: bool = False) -> None:
+        """Esce dalla TUI (ripristina il terminale) e chiede l'azione SSH.
+
+        Se ``in_new_terminal`` è True, lancia la sessione in una NUOVA
+        finestra del terminale scelto dall'utente e resta nella TUI
+        (non chiama self.exit).
+        """
+        if in_new_terminal:
+            self._launch_in_terminal(action)
+        else:
+            self.exit(action)
+
+    def _launch_in_terminal(self, action: LaunchAction) -> None:
+        """Lancia la sessione in una finestra del terminale scelto.
+
+        Con un solo terminale disponibile non c'e' niente da scegliere: si usa
+        quello senza chiedere. E' il caso di ``BRAVORIC_TERMINAL``, che fissa il
+        terminale e salta la domanda.
+        """
+        terminals = detect_gui_terminals()
+        if not terminals:
+            self.notify("Nessun terminale GUI trovato nel PATH", severity="error")
+            return
+        if len(terminals) == 1:
+            self._do_launch_in_terminal(action, terminals[0])
+            return
+
+        def _on_choose(terminal: str) -> None:
+            self._do_launch_in_terminal(action, terminal)
+
+        self.push_screen(TerminalChoiceScreen(terminals, _on_choose))
+
+    def _do_launch_in_terminal(self, action: LaunchAction, terminal: str) -> None:
+        """Lancia la sessione in una nuova finestra del terminale scelto.
+
+        Ricostruisce la riga di comando ``bravoric-ssh`` equivalente a quella che
+        main() eseguirebbe per questa LaunchAction, così la finestra nuova si
+        comporta esattamente come il flusso diretto (password, jump host,
+        audit, cronologia...). Ogni token viene quotato singolarmente: la stringa
+        finale è un comando shell che gira dentro ``sh -c``.
+        """
+        from .history import record_history
+
+        argv_tui: list[str] = [sys.executable, "-m", "bravoric_ssh_client"]
+        if self._config and self._config.path:
+            argv_tui += ["-c", str(self._config.path)]
+        if action.rotation:
+            argv_tui += ["--rotation", action.rotation]
+
+        if action.kind == "attach":
+            argv_tui += ["--attach", action.host.alias, action.session or ""]
+        elif action.kind == "attach_ro":
+            argv_tui += ["--attach-ro", action.host.alias, action.session or ""]
+        elif action.kind == "new":
+            argv_tui += ["--new", action.host.alias]
+            if action.name:
+                argv_tui.append(action.name)
+        elif action.kind == "shell":
+            argv_tui += ["--shell", action.host.alias]
+        else:
+            return
+
+        inner = "exec " + " ".join(_sh_quote(a) for a in argv_tui)
+        argv = terminal_argv(terminal, inner)
+
+        try:
+            subprocess.Popen(
+                argv,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError as exc:
+            self.notify(f"Errore apertura terminale: {exc}", severity="error")
+            return
+
+        if self._config:
+            record_history(self._config, action.host.alias, action.session or "")
+        self.notify(f"Aperto in {os.path.basename(terminal)}", severity="information")
 
     def quit_to_shell(self) -> None:
         self.exit()
@@ -2088,7 +2190,8 @@ class ObserveScreen(BravoricScreen):
         host = self._view_host(host_alias)
         if host:
             self.app.request_launch(
-                LaunchAction(kind="attach", host=host, session=session, rotation=self._name)
+                LaunchAction(kind="attach", host=host, session=session, rotation=self._name),
+                in_new_terminal=True,
             )
 
     def action_interactive(self) -> None:
@@ -2218,10 +2321,14 @@ class InputScreen(BravoricScreen):
         import asyncio
         import inspect
 
+        # Chiudi PRIMA questo schermo, poi esegui la callback.
+        # Se la callback apre un nuovo schermo (es. la scelta del terminale)
+        # un pop eseguito DOPO lo richiuderebbe subito, annullando l'apertura:
+        # era il bug del tasto "n" (nuova sessione) salvata con Ctrl+S.
+        self.app.pop_screen()
         result = self._on_submit(value)
         if inspect.isawaitable(result):
             asyncio.create_task(result)
-        self.app.pop_screen()
 
     def action_suggest_prev(self) -> None:
         if not self._suggestions:
@@ -2506,7 +2613,9 @@ class QuickLaunchScreen(BravoricScreen):
                 ssh_adapter.tmux_send_input, self._host, slug, agent, cfg, enter=True, mode="keys"
             )
         self.app.notify(f"'{label}' in sessione '{slug}'", severity="information")
-        self.app.request_launch(LaunchAction(kind="attach", host=self._host, session=slug))
+        self.app.request_launch(
+            LaunchAction(kind="attach", host=self._host, session=slug), in_new_terminal=True
+        )
 
     def action_cancel(self) -> None:
         self.app.pop_screen()
@@ -2965,13 +3074,15 @@ class LaunchAgentScreen(BravoricScreen):
                     self.app.notify(
                         f"Agente '{agent}' lanciato in '{slug}'", severity="information"
                     )
-                    # Esci dalla TUI e apri il terminale con la sessione tmux appena
-                    # creata (con l'agente dentro), esattamente come quando si preme
-                    # Enter su una sessione o si crea con `n` + nome + Ctrl+S.
+                    # Apri la sessione tmux appena creata (con l'agente dentro) in una
+                    # NUOVA finestra del terminale scelto dall'utente, esattamente come
+                    # quando si preme Enter su una sessione o si crea con `n` + nome +
+                    # Ctrl+S. La TUI resta viva: non viene piu' chiusa dal lancio.
                     if not self.is_mounted:
                         return
                     self.app.request_launch(
-                        LaunchAction(kind="attach", host=self._host, session=slug)
+                        LaunchAction(kind="attach", host=self._host, session=slug),
+                        in_new_terminal=True,
                     )
                     return
 
@@ -3515,7 +3626,10 @@ class SessionScreen(BravoricScreen):
             self.action_new_session()
 
     def _do_attach(self, name: str) -> None:
-        self.app.request_launch(LaunchAction(kind="attach", host=self._host, session=name))
+        self.app.request_launch(
+            LaunchAction(kind="attach", host=self._host, session=name),
+            in_new_terminal=True,
+        )
 
     def action_back(self) -> None:
         self.app.pop_screen()
@@ -3539,15 +3653,21 @@ class SessionScreen(BravoricScreen):
         )
 
     def _new_named(self, name: str) -> None:
-        self.app.request_launch(LaunchAction(kind="new", host=self._host, name=name))
+        self.app.request_launch(
+            LaunchAction(kind="new", host=self._host, name=name),
+            in_new_terminal=True,
+        )
 
     def action_shell(self) -> None:
-        self.app.request_launch(LaunchAction(kind="shell", host=self._host))
+        self.app.request_launch(LaunchAction(kind="shell", host=self._host), in_new_terminal=True)
 
     def action_attach_ro(self) -> None:
         name = self._selected_session()
         if name:
-            self.app.request_launch(LaunchAction(kind="attach_ro", host=self._host, session=name))
+            self.app.request_launch(
+                LaunchAction(kind="attach_ro", host=self._host, session=name),
+                in_new_terminal=True,
+            )
         else:
             self.app.notify("Nessuna sessione selezionata")
 

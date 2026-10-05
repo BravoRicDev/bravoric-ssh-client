@@ -66,8 +66,15 @@ niente da installare sui server.
 - `tmux` sui server gestiti (e in locale per gli host locali)
 - opzionale: `mc` (Midnight Commander) per la vista di scambio file
 - opzionale: `script` (util-linux) per registrare le shell SSH
-- opzionale: `kitty` / `ptyxis` / `gnome-terminal` per aprire le sessioni in finestre separate
-  - `kitty` viene rilevato automaticamente (non serve `BRAVORIC_TERMINAL`); abilita anche il renderer kitty-unicode per l'avatar di pi-emote se `TERM_PROGRAM=kitty` e' impostato in kitty.conf
+- opzionale: un terminale grafico (`kitty`, `ptyxis`, `gnome-terminal`, `konsole`,
+  `alacritty`) per aprire le sessioni in finestre separate. Il client rileva quelli
+  disponibili nel `PATH` e **chiede quale usare ogni volta** che agganci o crei una
+  sessione — così puoi scegliere un terminale che permette lo zoom-out per una
+  sessione ridimensionata altrove (kitty, per esempio, non lo permette, ptyxis sì).
+  Se ne è installato uno solo non c'è niente da scegliere e la domanda viene
+  saltata; imposta `BRAVORIC_TERMINAL` per fissarne uno e saltare la domanda anche
+  quando ne hai più di uno.
+  - `kitty` abilita anche il renderer kitty-unicode per l'avatar di pi-emote se `TERM_PROGRAM=kitty` e' impostato in kitty.conf
 
 ## Installazione
 
@@ -159,6 +166,14 @@ password va impostata la prima volta con `p`.
   - `d` dettagli sessione · `w` elenca/gestisci finestre (rinomina `r`, chiudi `k`)
   - `D` stacca gli altri client · `W` nuova finestra · `g` aggiorna
   - `s` apre una shell SSH semplice · `Esc` torna agli host
+
+Agganciare (anche in sola lettura), creare una sessione e aprire una shell aprono
+una **finestra nuova** del terminale che scegli dall'elenco; la TUI resta aperta,
+così puoi lanciare altre sessioni senza uscire. Lo stesso vale per l'attach
+dall'observe screen, dal pannello di lancio rapido e dal launcher degli agenti.
+La finestra nuova esegue un processo `bravoric-ssh` completo, quindi si comporta
+esattamente come un lancio diretto: password, jump host, rotazione, audit log,
+cronologia e titolo della finestra funzionano allo stesso modo.
 
 **Titolo finestra**: quando ti agganci a (o crei) una sessione, il titolo della
 finestra del terminale diventa `HOST - SESSIONE`. Il client imposta la stringa di
@@ -336,9 +351,10 @@ Le sessioni interattive vengono registrate in log compressi:
 
 I file `.log.gz` sono pronti per parsing offline (`zgrep`, regex, ecc.).
 
-> Quando scegli un'azione (attach/nuova/shell) la TUI esce *prima* di lanciare
-> ssh, così il terminale viene ripristinato pulito; ssh prende il posto del
-> processo e al suo termine torni al prompt.
+> Quando scegli un'azione (attach/nuova/shell) la sessione si apre in una
+> **finestra nuova** del terminale che scegli: la TUI resta viva, così puoi
+> lanciare altre sessioni, e il terminale in cui gira non viene mai sporcato.
+> Chiudi la finestra nuova (o fai detach) per tornare alla TUI.
 
 ## Test
 

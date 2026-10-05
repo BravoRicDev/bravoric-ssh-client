@@ -61,8 +61,15 @@ responsive. No external services, nothing to install on your servers.
 - `tmux` on the servers you manage (and locally for local hosts)
 - Optional: `mc` (Midnight Commander) for the file-exchange view
 - Optional: `script` (util-linux) to record plain SSH shells
-- Optional: `kitty` / `ptyxis` / `gnome-terminal` to open sessions in separate windows
-  - `kitty` is detected automatically (no `BRAVORIC_TERMINAL` needed); it also enables the kitty-unicode avatar renderer in pi-emote when `TERM_PROGRAM=kitty` is set in kitty.conf
+- Optional: a graphical terminal (`kitty`, `ptyxis`, `gnome-terminal`,
+  `konsole`, `alacritty`) to open sessions in separate windows. The client
+  detects the ones available in `PATH` and **asks which to use each time** you
+  attach to or create a session — so you can pick a terminal that supports
+  zooming out for a session that was resized elsewhere (kitty, for example, does
+  not let you zoom out, while ptyxis does). If a single graphical terminal is
+  installed there is nothing to choose and the prompt is skipped; set
+  `BRAVORIC_TERMINAL` to pin one and skip the prompt even with several.
+  - `kitty` also enables the kitty-unicode avatar renderer in pi-emote when `TERM_PROGRAM=kitty` is set in kitty.conf
 
 ## Installation
 
@@ -154,6 +161,14 @@ the password the first time with `p`.
   - `d` session details · `w` list/manage windows (rename `r`, close `k`)
   - `D` detach other clients · `W` new window · `g` refresh
   - `s` open a plain SSH shell · `Esc` back to hosts
+
+Attach, read-only attach, new session and plain shell open in a **new window** of
+a terminal you pick from the list; the TUI stays open, so you can launch more
+sessions from it without leaving it. The same happens when you attach from the
+observe screen, the quick-launch panel or the agent launcher. The new window runs
+a full `bravoric-ssh` process, so it behaves exactly like a direct launch:
+password, jump host, rotation, audit log, session history and window title all
+work the same way.
 
 **Window title**: when you attach to (or create) a session, the terminal window
 title becomes `HOST - SESSION`. The client sets the remote tmux title string
@@ -329,9 +344,10 @@ Interactive sessions are recorded to compressed logs:
 
 The `.log.gz` files are ready for offline parsing (`zgrep`, regex, ...).
 
-> When you pick an action (attach/new/shell) the TUI exits *before* launching
-> ssh, so the terminal is restored cleanly; ssh replaces the process and you
-> return to the shell once it ends.
+> When you pick an action (attach/new/shell) the session opens in a **new
+> window** of the terminal you choose: the TUI stays alive, so you can launch
+> more sessions from it, and the terminal running the TUI is never left dirty.
+> Close the new window (or detach) to go back to the TUI.
 
 ## Testing
 

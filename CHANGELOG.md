@@ -19,6 +19,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Session audit trail to gzip logs.
 - MCP server (`bravoric-ssh-mcp`) and bundled agent skill.
 - CI on Linux/macOS/Windows with pytest, ruff and coverage.
+- Remote tmux sessions (attach, new session, plain shell — from the session
+  screen, the observe screen, the quick-launch panel and the agent launcher) now
+  open in a **new window** of a terminal chosen from a list at launch time,
+  instead of taking over the terminal running the TUI. Handy when a session was
+  resized from elsewhere and needs a terminal that can zoom out.
+  `BRAVORIC_TERMINAL` pins one terminal and skips the prompt; the prompt is also
+  skipped when only one graphical terminal is installed.
 
 ### Fixed
 
