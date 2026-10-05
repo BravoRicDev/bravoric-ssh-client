@@ -24,9 +24,62 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 const execFileAsync = promisify(execFile);
-const PYTHON_BIN = "/home/riccardo/Progetti/bravoric-ssh-client/.venv/bin/python";
-const BRIDGE_SCRIPT = "/home/riccardo/.pi/agent/extensions/bravoric-bridge.py";
-const BRAVORIC_BIN = "/home/riccardo/.local/bin/bravoric-ssh";
+
+const HOME = os.homedir();
+
+/** Primo percorso che esiste, o `null` se nessuno. Un candidato illeggibile non ferma la ricerca. */
+function firstExisting(paths: string[]): string | null {
+	for (const p of paths) {
+		try {
+			if (fs.existsSync(p)) return p;
+		} catch {
+			/* ignora e prova il prossimo */
+		}
+	}
+	return null;
+}
+
+// NESSUN PATH DI UNA MACCHINA SOLA: ogni percorso e' sovrascrivibile da variabile
+// d'ambiente e i default sono le posizioni note su macOS e Linux. Vince il primo
+// candidato che esiste, quindi su una macchina gia' configurata il comportamento e'
+// quello di sempre; le variabili servono a chi installa altrove.
+//   BRAVORIC_SSH_CLIENT_DIR  cartella del client (quella con la venv)
+//   BRAVORIC_PYTHON          interprete Python che ha il pacchetto installato
+//   BRAVORIC_BRIDGE          percorso di bravoric-bridge.py
+//   BRAVORIC_BIN             eseguibile della CLI bravoric-ssh
+const CLIENT_DIR =
+	process.env.BRAVORIC_SSH_CLIENT_DIR ??
+	firstExisting([
+		path.join(HOME, "Progetti", "bravoric-ssh-client"),
+		path.join(HOME, "progetti", "bravoric-ssh-client"),
+	]) ??
+	path.join(HOME, "Progetti", "bravoric-ssh-client");
+
+const PYTHON_BIN =
+	process.env.BRAVORIC_PYTHON ??
+	firstExisting([
+		path.join(CLIENT_DIR, ".venv", "bin", "python"),
+		path.join(CLIENT_DIR, ".venv", "bin", "python3"),
+		"/usr/bin/python3",
+	]) ??
+	path.join(CLIENT_DIR, ".venv", "bin", "python");
+
+const BRIDGE_SCRIPT =
+	process.env.BRAVORIC_BRIDGE ??
+	firstExisting([
+		path.join(HOME, ".pi", "agent", "extensions", "bravoric-bridge.py"),
+		path.join(CLIENT_DIR, "integrations", "pi", "bravoric-bridge.py"),
+	]) ??
+	path.join(HOME, ".pi", "agent", "extensions", "bravoric-bridge.py");
+
+const BRAVORIC_BIN =
+	process.env.BRAVORIC_BIN ??
+	firstExisting([
+		path.join(HOME, ".local", "bin", "bravoric-ssh"),
+		"/usr/local/bin/bravoric-ssh",
+		"/opt/homebrew/bin/bravoric-ssh",
+	]) ??
+	path.join(HOME, ".local", "bin", "bravoric-ssh");
 
 const NEW_SESSION = "➕ Nuova sessione…";
 const SESSION_PREFIX = "🪟 ";
