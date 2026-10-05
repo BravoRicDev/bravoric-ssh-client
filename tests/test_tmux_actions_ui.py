@@ -268,9 +268,7 @@ def test_launch_agent_localhost(monkeypatch):
     # davvero. Il ramo su `command -v` tiene separato `_load_models`, che usa lo
     # stesso adapter: li' lo stdout vuoto significa "nessun modello".
     def fake(host, command, cfg=None, *, timeout=20):
-        stdout = (
-            "FOUND:opencode\nFOUND:claude\nFOUND:hermes\n" if "command -v" in command else ""
-        )
+        stdout = "FOUND:opencode\nFOUND:claude\nFOUND:hermes\n" if "command -v" in command else ""
         return ssh_adapter.TmuxActionResult(ok=True, stdout=stdout, stderr="")
 
     monkeypatch.setattr(ssh_adapter, "run_tmux_action", fake)
